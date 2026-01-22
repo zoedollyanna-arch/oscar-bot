@@ -309,9 +309,17 @@ function inAllowedAcademyScope(channel) {
 }
 
 function inTicketScope(channel) {
-  if (!channel) return false;
-  if (!OSCAR_TICKET_CATEGORY_ID) return false;
-  return channel.parentId === OSCAR_TICKET_CATEGORY_ID;
+  if (!channel || !channel.parentId || !channel.guild) return false;
+
+  // If env is set, treat only that category as ticket scope
+  if (OSCAR_TICKET_CATEGORY_ID && channel.parentId === OSCAR_TICKET_CATEGORY_ID) return true;
+
+  // Otherwise, detect by category name (top-level)
+  const parent = channel.guild.channels.cache.get(channel.parentId);
+  if (!parent || parent.type !== ChannelType.GuildCategory) return false;
+
+  const name = String(parent.name || "").toLowerCase();
+  return name.includes("academy tickets") || name === "📂 academy tickets".toLowerCase();
 }
 
 function requireScopeOrReply(interaction) {
@@ -654,46 +662,42 @@ function buildTicketPermOverwrites(guild, applicantId) {
 }
 
 async function getOrCreateTicketCategory(guild) {
-  // Use first academy category as parent
-  const academyCategoryId = OSCAR_ALLOWED_CATEGORY_IDS[0];
-  if (!academyCategoryId) {
-    throw new Error("No Academy category configured for tickets.");
+  // If a specific ticket category ID is provided, use it (must be a CATEGORY)
+  if (OSCAR_TICKET_CATEGORY_ID) {
+    const ch = await guild.channels.fetch(OSCAR_TICKET_CATEGORY_ID).catch(() => null);
+    if (ch && ch.type === ChannelType.GuildCategory) return ch;
+    throw new Error("Ticket category not found or not a category channel.");
   }
 
-  const academyCategory = await guild.channels.fetch(academyCategoryId);
-  if (!academyCategory || academyCategory.type !== ChannelType.GuildCategory) {
-    throw new Error("Academy category not found or invalid.");
-  }
-
-  // Look for existing ticket category
-  const existing = guild.channels.cache.find(
-    c =>
-      c.type === ChannelType.GuildCategory &&
-      c.parentId === academyCategory.id &&
-      c.name.toLowerCase().includes("ticket")
-  );
+  // Find an existing TOP-LEVEL category by name
+  const existing =
+    guild.channels.cache.find(
+      (c) =>
+        c.type === ChannelType.GuildCategory &&
+        String(c.name || "").toLowerCase().includes("academy tickets")
+    ) ||
+    guild.channels.cache.find(
+      (c) =>
+        c.type === ChannelType.GuildCategory &&
+        String(c.name || "").toLowerCase() === "academy tickets"
+    );
 
   if (existing) return existing;
 
-  // Create it
+  // Create a TOP-LEVEL category (Discord does not allow category nesting)
   return guild.channels.create({
     name: "📂 Academy Tickets",
     type: ChannelType.GuildCategory,
-    parent: academyCategory.id,
-    reason: "Oscar auto-created ticket category",
+    reason: "Oscar auto-created Academy Tickets category",
   });
 }
 
 async function createPreAccessTicket(guild, applicantUser, context) {
   const category = await getOrCreateTicketCategory(guild);
 
-  const sl = safeSlice(context?.sl_username || "unknown", 24)
-    .replace(/[^a-z0-9_-]/gi, "")
-    .toLowerCase();
-
+  const sl = safeSlice(context?.sl_username || "unknown", 24).replace(/[^a-z0-9_-]/gi, "").toLowerCase();
   const shortId = Date.now().toString(36).slice(-5);
-  const channelName = `academy-ticket-${sl}-${shortId}`.slice(0, 90);
-
+  const channelName = `${OSCAR_TICKET_CHANNEL_PREFIX}-${sl}-${shortId}`.slice(0, 90);
   const ticket = await guild.channels.create({
     name: channelName,
     type: ChannelType.GuildText,
@@ -702,24 +706,30 @@ async function createPreAccessTicket(guild, applicantUser, context) {
     reason: "Oscar pre-access application ticket",
   });
 
+  const closeBtn = new ButtonBuilder()
+    .setCustomId(`oscar_ticket_close:${ticket.id}`)
+    .setLabel("Close Ticket")
+    .setStyle(ButtonStyle.Danger);
+
+  const row = new ActionRowBuilder().addComponents(closeBtn);
+
+  const eb = embedBase("Application Ticket", "This is a private ticket for application questions/concerns.")
+    .addFields(
+      { name: "Applicant", value: `${applicantUser} (\`${applicantUser.id}\`)`, inline: false },
+      { name: "SL Username", value: safeSlice(context?.sl_username || "N/A", 200), inline: true },
+      { name: "Type", value: safeSlice(context?.type || "N/A", 50), inline: true },
+      { name: "Status", value: safeSlice(context?.status || "N/A", 80), inline: true },
+      { name: "Next Steps", value: safeSlice(context?.next_steps || "N/A", 1000) || "N/A", inline: false }
+    );
+
   await ticket.send({
-    embeds: [
-      embedBase(
-        "Application Ticket",
-        "This is a private ticket for enrollment or application questions."
-      ).addFields(
-        { name: "Applicant", value: `${applicantUser}` },
-        { name: "SL Username", value: context?.sl_username || "N/A" },
-        { name: "Type", value: context?.type || "N/A" },
-        { name: "Status", value: context?.status || "Pending" },
-        { name: "Next Steps", value: context?.next_steps || "N/A" }
-      ),
-    ],
+    content: "Staff will respond here. Please describe your question clearly.",
+    embeds: [eb],
+    components: [row],
   });
 
   return ticket;
 }
-
 
 async function safeDM(user, message) {
   try {
