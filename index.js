@@ -1621,6 +1621,103 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    // Modal Submissions
+    if (interaction.isModalSubmit()) {
+      const [kind, userId] = interaction.customId.split(":");
+      const guild = interaction.guild;
+
+      if (kind === "teacher_followup") {
+        const primaryRole = interaction.fields.getTextInputValue('primary_role');
+        const workshops = interaction.fields.getTextInputValue('workshops');
+        const skills = interaction.fields.getTextInputValue('skills');
+        const availability = interaction.fields.getTextInputValue('availability');
+        const leepGoal = interaction.fields.getTextInputValue('leep_goal');
+
+        await interaction.reply({ ephemeral: true, content: "✅ Thank you! Your follow-up has been submitted and logged." });
+
+        // Log to #academy-operations
+        const embed = new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setTitle('🎓 Teacher Follow-Up Submitted')
+          .setDescription(`Follow-up completed by ${interaction.user}`)
+          .addFields(
+            { name: 'Applicant', value: `${interaction.user.tag} (${interaction.user.id})`, inline: false },
+            { name: 'Primary Role', value: safeSlice(primaryRole, 1024) || 'N/A', inline: false },
+            { name: 'Workshop Interest', value: safeSlice(workshops, 1024) || 'None specified', inline: false },
+            { name: 'Tech Skills', value: safeSlice(skills, 1024) || 'None specified', inline: false },
+            { name: 'Availability', value: safeSlice(availability, 1024) || 'N/A', inline: false },
+            { name: 'LEEP Goal', value: safeSlice(leepGoal, 1024) || 'None specified', inline: false },
+            { name: 'Status', value: '✅ Follow-Up Complete', inline: false }
+          )
+          .setTimestamp();
+
+        await logToAcademyOps(guild, embed);
+        await oscarLog(guild, `📋 Teacher follow-up submitted by ${interaction.user.tag}`);
+        return;
+      }
+
+      if (kind === "student_signature") {
+        const studentName = interaction.fields.getTextInputValue('student_name');
+        const parentName = interaction.fields.getTextInputValue('parent_name');
+        const signature = interaction.fields.getTextInputValue('signature');
+        const agreement = interaction.fields.getTextInputValue('agreement');
+
+        await interaction.reply({ ephemeral: true, content: "✅ Thank you! Your signature has been recorded and enrollment is being finalized." });
+
+        // Log to #academy-operations
+        const embed = new EmbedBuilder()
+          .setColor(0x57F287)
+          .setTitle('🎒 Student Enrollment Update Submitted')
+          .setDescription(`Signature completed by ${interaction.user}`)
+          .addFields(
+            { name: 'Student Name', value: safeSlice(studentName, 1024), inline: false },
+            { name: 'Parent/Guardian', value: safeSlice(parentName, 1024), inline: false },
+            { name: 'Update Type', value: 'Digital Signature', inline: true },
+            { name: 'Agreement', value: agreement.toLowerCase() === 'yes' ? '✅ Confirmed' : '⚠️ Not confirmed', inline: true },
+            { name: 'Timestamp', value: nowISO(), inline: false },
+            { name: 'Logged For', value: 'Records & Receipts', inline: false }
+          )
+          .setTimestamp();
+
+        await logToAcademyOps(guild, embed);
+        await oscarLog(guild, `🖊️ Student signature submitted by ${interaction.user.tag} for ${studentName}`);
+        return;
+      }
+
+      if (kind === "student_confirm") {
+        const studentName = interaction.fields.getTextInputValue('student_name');
+        const studentAge = interaction.fields.getTextInputValue('student_age');
+        const parentName = interaction.fields.getTextInputValue('parent_name');
+        const confirmAccurate = interaction.fields.getTextInputValue('confirm_accurate');
+        const notes = interaction.fields.getTextInputValue('notes');
+
+        await interaction.reply({ ephemeral: true, content: "✅ Thank you! Your information has been verified and recorded." });
+
+        // Log to #academy-operations
+        const embed = new EmbedBuilder()
+          .setColor(0x57F287)
+          .setTitle('🎒 Student Enrollment Update Submitted')
+          .setDescription(`Information verified by ${interaction.user}`)
+          .addFields(
+            { name: 'Student Name', value: safeSlice(studentName, 1024), inline: false },
+            { name: 'Student Age', value: safeSlice(studentAge, 100), inline: true },
+            { name: 'Parent/Guardian', value: safeSlice(parentName, 1024), inline: false },
+            { name: 'Update Type', value: 'Age Confirmation', inline: true },
+            { name: 'Confirmed', value: confirmAccurate.toLowerCase() === 'yes' ? '✅ Yes' : '⚠️ Not confirmed', inline: true },
+            { name: 'Notes', value: safeSlice(notes, 1024) || 'None', inline: false },
+            { name: 'Timestamp', value: nowISO(), inline: false },
+            { name: 'Logged For', value: 'Records & Receipts', inline: false }
+          )
+          .setTimestamp();
+
+        await logToAcademyOps(guild, embed);
+        await oscarLog(guild, `✅ Student info confirmed by ${interaction.user.tag} for ${studentName}`);
+        return;
+      }
+
+      return;
+    }
+
     // Slash Commands
     if (!interaction.isChatInputCommand()) return;
     if (!requireScopeOrReply(interaction)) return;
