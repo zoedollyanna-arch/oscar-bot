@@ -1624,7 +1624,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // Modal Submissions
     if (interaction.isModalSubmit()) {
       const [kind, userId] = interaction.customId.split(":");
-      const guild = interaction.guild;
+      const guild = interaction.guild || await client.guilds.fetch(GUILD_ID).catch(() => null);
 
       if (kind === "teacher_followup") {
         const primaryRole = interaction.fields.getTextInputValue('primary_role');
