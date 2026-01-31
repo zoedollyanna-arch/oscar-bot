@@ -108,6 +108,9 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require("discord.js");
 
 const { google } = require("googleapis");
@@ -740,6 +743,246 @@ async function safeDM(user, message) {
   }
 }
 
+// -------------------- FOLLOW-UP SYSTEM --------------------
+
+// CSV Parsing Helper
+const csv = require('fs');
+function parseCSV(filePath) {
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.split('\n');
+    if (lines.length < 2) return [];
+    
+    // Simple CSV parser (handles quotes)
+    function parseLine(line) {
+      const result = [];
+      let current = '';
+      let inQuotes = false;
+      
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+          result.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim());
+      return result;
+    }
+    
+    const headers = parseLine(lines[0]);
+    const rows = [];
+    
+    for (let i = 1; i < lines.length; i++) {
+      if (lines[i].trim()) {
+        const values = parseLine(lines[i]);
+        const row = {};
+        headers.forEach((header, index) => {
+          row[header] = values[index] || '';
+        });
+        rows.push(row);
+      }
+    }
+    
+    return rows;
+  } catch (e) {
+    console.error('CSV Parse Error:', e);
+    return [];
+  }
+}
+
+// Role Detection Logic
+function detectTeacherRoles(positionsApplyingFor) {
+  const positions = String(positionsApplyingFor || '').toLowerCase();
+  const roles = [];
+  
+  if (positions.includes('culinary')) roles.push('culinary');
+  if (positions.includes('elementary')) roles.push('elementary');
+  if (positions.includes('high school')) roles.push('secondary');
+  if (positions.includes('school counselor')) roles.push('counselor');
+  if (positions.includes('office') || positions.includes('administrative')) roles.push('admin_support');
+  if (positions.includes('daycare')) roles.push('daycare');
+  
+  // If multiple roles, use combined template
+  if (roles.length > 1) return ['combined_teacher_workshop'];
+  if (roles.length === 1) return roles;
+  
+  return ['teacher_general']; // fallback
+}
+
+// Teacher Modal Builder
+function buildTeacherFollowUpModal(userId, roles) {
+  const modal = new ModalBuilder()
+    .setCustomId(`teacher_followup:${userId}`)
+    .setTitle('🎓 Lifeline Academy – Placement Follow-Up');
+  
+  const primaryRole = new TextInputBuilder()
+    .setCustomId('primary_role')
+    .setLabel('Primary Role This Term')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('e.g., Elementary Teacher, Culinary Instructor')
+    .setRequired(true)
+    .setMaxLength(100);
+  
+  const workshops = new TextInputBuilder()
+    .setCustomId('workshops')
+    .setLabel('Workshops You\'d Like to Teach or Assist')
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder('List any workshops, electives, or clubs...')
+    .setRequired(false)
+    .setMaxLength(500);
+  
+  const skills = new TextInputBuilder()
+    .setCustomId('skills')
+    .setLabel('SL / Creative / Tech Skills')
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder('Photography, building, scripting, etc.')
+    .setRequired(false)
+    .setMaxLength(500);
+  
+  const availability = new TextInputBuilder()
+    .setCustomId('availability')
+    .setLabel('Weekly Availability')
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder('Days and times you\'re available...')
+    .setRequired(true)
+    .setMaxLength(300);
+  
+  const leepGoal = new TextInputBuilder()
+    .setCustomId('leep_goal')
+    .setLabel('LEEP Growth Goal')
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder('What skill would you like to develop?')
+    .setRequired(false)
+    .setMaxLength(300);
+  
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(primaryRole),
+    new ActionRowBuilder().addComponents(workshops),
+    new ActionRowBuilder().addComponents(skills),
+    new ActionRowBuilder().addComponents(availability),
+    new ActionRowBuilder().addComponents(leepGoal)
+  );
+  
+  return modal;
+}
+
+// Student Modal Builders
+function buildStudentSignatureModal(userId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`student_signature:${userId}`)
+    .setTitle('🖊️ Enrollment Completion');
+  
+  const studentName = new TextInputBuilder()
+    .setCustomId('student_name')
+    .setLabel('Student Full Name')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(100);
+  
+  const parentName = new TextInputBuilder()
+    .setCustomId('parent_name')
+    .setLabel('Parent / Guardian Full Name')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(100);
+  
+  const signature = new TextInputBuilder()
+    .setCustomId('signature')
+    .setLabel('Digital Signature (Type Full Name)')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('Type your full name here')
+    .setRequired(true)
+    .setMaxLength(100);
+  
+  const agreement = new TextInputBuilder()
+    .setCustomId('agreement')
+    .setLabel('Confirm Agreement to Academy Policies')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('Type: Yes')
+    .setRequired(true)
+    .setMaxLength(10);
+  
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(studentName),
+    new ActionRowBuilder().addComponents(parentName),
+    new ActionRowBuilder().addComponents(signature),
+    new ActionRowBuilder().addComponents(agreement)
+  );
+  
+  return modal;
+}
+
+function buildStudentConfirmModal(userId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`student_confirm:${userId}`)
+    .setTitle('🎒 Information Verification');
+  
+  const studentName = new TextInputBuilder()
+    .setCustomId('student_name')
+    .setLabel('Student Full Name')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(100);
+  
+  const studentAge = new TextInputBuilder()
+    .setCustomId('student_age')
+    .setLabel('Student Age')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('e.g., 5, 10, 15')
+    .setRequired(true)
+    .setMaxLength(10);
+  
+  const parentName = new TextInputBuilder()
+    .setCustomId('parent_name')
+    .setLabel('Parent / Guardian Full Name')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(100);
+  
+  const confirmAccurate = new TextInputBuilder()
+    .setCustomId('confirm_accurate')
+    .setLabel('Confirm Information Is Accurate')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('Type: Yes')
+    .setRequired(true)
+    .setMaxLength(10);
+  
+  const notes = new TextInputBuilder()
+    .setCustomId('notes')
+    .setLabel('Notes (Optional)')
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder('Any additional information...')
+    .setRequired(false)
+    .setMaxLength(500);
+  
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(studentName),
+    new ActionRowBuilder().addComponents(studentAge),
+    new ActionRowBuilder().addComponents(parentName),
+    new ActionRowBuilder().addComponents(confirmAccurate),
+    new ActionRowBuilder().addComponents(notes)
+  );
+  
+  return modal;
+}
+
+// Academy Operations Logger
+async function logToAcademyOps(guild, embed) {
+  try {
+    if (!OSCAR_OPERATIONS_CHANNEL_ID) return;
+    const ch = await guild.channels.fetch(OSCAR_OPERATIONS_CHANNEL_ID).catch(() => null);
+    if (!ch || ch.type !== ChannelType.GuildText) return;
+    await ch.send({ embeds: [embed] });
+  } catch (e) {
+    console.error('Failed to log to academy ops:', e);
+  }
+}
+
 // -------------------- COMMANDS --------------------
 const commandDefs = [
   // OSCAR CORE
@@ -905,6 +1148,38 @@ const commandDefs = [
         .setDescription("Staff: deny a teacher application")
         .addStringOption((o) => o.setName("sl_username").setDescription("SL username").setRequired(true))
         .addStringOption((o) => o.setName("reason").setDescription("Reason").setRequired(true))
+    )
+    .addSubcommandGroup((g) =>
+      g
+        .setName("followup")
+        .setDescription("Follow-up tools for teachers and students")
+        .addSubcommand((s) =>
+          s
+            .setName("teacher")
+            .setDescription("Send follow-up modal to teacher/staff applicant")
+            .addUserOption((o) => o.setName("user").setDescription("Discord user").setRequired(true))
+        )
+        .addSubcommand((s) =>
+          s
+            .setName("student")
+            .setDescription("Send follow-up modal to student/parent")
+            .addUserOption((o) => o.setName("user").setDescription("Discord user (parent)").setRequired(true))
+            .addStringOption((o) =>
+              o
+                .setName("type")
+                .setDescription("Follow-up type")
+                .setRequired(true)
+                .addChoices(
+                  { name: "Missing Signature", value: "signature" },
+                  { name: "Confirm Information/Age", value: "confirm" }
+                )
+            )
+        )
+        .addSubcommand((s) =>
+          s
+            .setName("student_auto")
+            .setDescription("Auto-scan student sheet and DM affected families")
+        )
     ),
 
   // CLASSROOM TOOLS
@@ -1271,6 +1546,149 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const sl = decodeURIComponent(b || "");
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         return replyStatus(interaction, type, sl);
+      }
+
+      if (kind === "open_teacher_followup") {
+        const targetUserId = a;
+        const staffUserId = b;
+        
+        if (interaction.user.id !== targetUserId) {
+          return interaction.reply({ ephemeral: true, content: "❌ This follow-up is not for you." });
+        }
+        
+        const roles = ['general']; // Default, we can enhance this
+        const modal = buildTeacherFollowUpModal(targetUserId, roles);
+        
+        await interaction.showModal(modal);
+        return;
+      }
+
+      if (kind === "open_student_followup") {
+        const type = a;
+        const targetUserId = b;
+        const staffUserId = c;
+        
+        if (interaction.user.id !== targetUserId) {
+          return interaction.reply({ ephemeral: true, content: "❌ This follow-up is not for you." });
+        }
+        
+        let modal;
+        if (type === "signature") {
+          modal = buildStudentSignatureModal(targetUserId);
+        } else {
+          modal = buildStudentConfirmModal(targetUserId);
+        }
+        
+        await interaction.showModal(modal);
+        return;
+      }
+
+      return;
+    }
+
+    // Modal Submissions
+    if (interaction.isModalSubmit()) {
+      const [kind, userId] = interaction.customId.split(":");
+      const guild = interaction.guild;
+
+      if (kind === "teacher_followup") {
+        const primaryRole = interaction.fields.getTextInputValue('primary_role');
+        const workshops = interaction.fields.getTextInputValue('workshops');
+        const skills = interaction.fields.getTextInputValue('skills');
+        const availability = interaction.fields.getTextInputValue('availability');
+        const leepGoal = interaction.fields.getTextInputValue('leep_goal');
+
+        await interaction.reply({ ephemeral: true, content: "✅ Thank you! Your follow-up has been submitted and logged." });
+
+        // Log to #academy-operations
+        const embed = new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setTitle('🎓 Teacher Follow-Up Submitted')
+          .setDescription(`Follow-up completed by ${interaction.user}`)
+          .addFields(
+            { name: 'Applicant', value: `${interaction.user.tag} (${interaction.user.id})`, inline: false },
+            { name: 'Primary Role', value: safeSlice(primaryRole, 1024) || 'N/A', inline: false },
+            { name: 'Workshop Interest', value: safeSlice(workshops, 1024) || 'None specified', inline: false },
+            { name: 'Tech Skills', value: safeSlice(skills, 1024) || 'None specified', inline: false },
+            { name: 'Availability', value: safeSlice(availability, 1024) || 'N/A', inline: false },
+            { name: 'LEEP Goal', value: safeSlice(leepGoal, 1024) || 'None specified', inline: false },
+            { name: 'Status', value: '✅ Follow-Up Complete', inline: false }
+          )
+          .setTimestamp();
+
+        await logToAcademyOps(guild, embed);
+        await oscarLog(guild, `📋 Teacher follow-up submitted by ${interaction.user.tag}`);
+
+        // Update Google Sheet
+        try {
+          const result = await findRowBySlUsername(TEACHER_SHEET_ID, ''); // We need to find by discord_id instead
+          // For now, just log it. You can enhance this to update the sheet with the responses
+        } catch (e) {
+          console.error('Failed to update sheet:', e);
+        }
+
+        return;
+      }
+
+      if (kind === "student_signature") {
+        const studentName = interaction.fields.getTextInputValue('student_name');
+        const parentName = interaction.fields.getTextInputValue('parent_name');
+        const signature = interaction.fields.getTextInputValue('signature');
+        const agreement = interaction.fields.getTextInputValue('agreement');
+
+        await interaction.reply({ ephemeral: true, content: "✅ Thank you! Your signature has been recorded and enrollment is being finalized." });
+
+        // Log to #academy-operations
+        const embed = new EmbedBuilder()
+          .setColor(0x57F287)
+          .setTitle('🎒 Student Enrollment Update Submitted')
+          .setDescription(`Signature completed by ${interaction.user}`)
+          .addFields(
+            { name: 'Student Name', value: safeSlice(studentName, 1024), inline: false },
+            { name: 'Parent/Guardian', value: safeSlice(parentName, 1024), inline: false },
+            { name: 'Update Type', value: 'Digital Signature', inline: true },
+            { name: 'Agreement', value: agreement.toLowerCase() === 'yes' ? '✅ Confirmed' : '⚠️ Not confirmed', inline: true },
+            { name: 'Timestamp', value: nowISO(), inline: false },
+            { name: 'Logged For', value: 'Records & Receipts', inline: false }
+          )
+          .setTimestamp();
+
+        await logToAcademyOps(guild, embed);
+        await oscarLog(guild, `🖊️ Student signature submitted by ${interaction.user.tag} for ${studentName}`);
+
+        return;
+      }
+
+      if (kind === "student_confirm") {
+        const studentName = interaction.fields.getTextInputValue('student_name');
+        const studentAge = interaction.fields.getTextInputValue('student_age');
+        const parentName = interaction.fields.getTextInputValue('parent_name');
+        const confirmAccurate = interaction.fields.getTextInputValue('confirm_accurate');
+        const notes = interaction.fields.getTextInputValue('notes');
+
+        await interaction.reply({ ephemeral: true, content: "✅ Thank you! Your information has been verified and recorded." });
+
+        // Log to #academy-operations
+        const embed = new EmbedBuilder()
+          .setColor(0x57F287)
+          .setTitle('🎒 Student Enrollment Update Submitted')
+          .setDescription(`Information verified by ${interaction.user}`)
+          .addFields(
+            { name: 'Student Name', value: safeSlice(studentName, 1024), inline: false },
+            { name: 'Student Age', value: safeSlice(studentAge, 100), inline: true },
+            { name: 'Parent/Guardian', value: safeSlice(parentName, 1024), inline: false },
+            { name: 'Update Type', value: 'Age Confirmation', inline: true },
+            { name: 'Confirmed', value: confirmAccurate.toLowerCase() === 'yes' ? '✅ Yes' : '⚠️ Not confirmed', inline: true },
+            { name: 'Notes', value: safeSlice(notes, 1024) || 'None', inline: false },
+            { name: 'Timestamp', value: nowISO(), inline: false },
+            { name: 'Logged For', value: 'Records & Receipts', inline: false }
+          )
+          .setTimestamp();
+
+        await logToAcademyOps(guild, embed);
+        await oscarLog(guild, `✅ Student info confirmed by ${interaction.user.tag} for ${studentName}`);
+
+        return;
       }
 
       return;
@@ -1656,6 +2074,139 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await oscarLog(guild, `❌ Teacher denied: ${sl} by ${interaction.user.tag}`);
         return interaction.editReply({ content: `✅ Denied teacher **${sl}** and sent DM (if possible).` });
+      }
+
+      // Follow-up commands
+      const group = interaction.options.getSubcommandGroup(false);
+      if (group === "followup") {
+        if (!isTeacher(member)) {
+          return interaction.reply({ ephemeral: true, content: "❌ Staff only." });
+        }
+
+        const followupSub = interaction.options.getSubcommand(true);
+
+        if (followupSub === "teacher") {
+          const targetUser = interaction.options.getUser("user", true);
+          
+          await interaction.deferReply({ ephemeral: true }).catch(() => {});
+          
+          // Look up teacher in CSV or Sheet
+          const teacherCsvPath = path.join(__dirname, "_🎓Lifeline Academy (Teacher & Staff Application) (Responses) - Form Responses 1.csv");
+          const teachers = parseCSV(teacherCsvPath);
+          
+          // Find by discord_id
+          const teacher = teachers.find(t => t.discord_id && t.discord_id.toLowerCase() === targetUser.id.toLowerCase());
+          
+          if (!teacher) {
+            return interaction.editReply({ content: `❌ Could not find teacher application for ${targetUser.tag}. Make sure they're registered with /academy register-discord.` });
+          }
+          
+          const roles = detectTeacherRoles(teacher['Positions Applying For']);
+          const modal = buildTeacherFollowUpModal(targetUser.id, roles);
+          
+          // Send modal via DM
+          try {
+            const dmMessage = `🎓 **Lifeline Academy – Follow-Up Required**\n\nHello ${targetUser.username}!\n\nWe're excited about your application! To complete your placement process, please click the button below and fill out the follow-up form. This helps us match you with the best role and schedule.\n\nThank you!`;
+            
+            const followUpBtn = new ButtonBuilder()
+              .setCustomId(`open_teacher_followup:${targetUser.id}:${interaction.user.id}`)
+              .setLabel('Complete Follow-Up')
+              .setStyle(ButtonStyle.Primary);
+            
+            const row = new ActionRowBuilder().addComponents(followUpBtn);
+            
+            await targetUser.send({ content: dmMessage, components: [row] });
+            
+            await oscarLog(guild, `📧 Teacher follow-up sent to ${targetUser.tag} by ${interaction.user.tag}`);
+            return interaction.editReply({ content: `✅ Follow-up DM sent to **${targetUser.tag}**. They will complete a modal and responses will be logged to #academy-operations.` });
+          } catch (e) {
+            return interaction.editReply({ content: `❌ Failed to DM ${targetUser.tag}. They may have DMs disabled.` });
+          }
+        }
+
+        if (followupSub === "student") {
+          const targetUser = interaction.options.getUser("user", true);
+          const type = interaction.options.getString("type", true);
+          
+          await interaction.deferReply({ ephemeral: true }).catch(() => {});
+          
+          let modal;
+          let dmMessage;
+          
+          if (type === "signature") {
+            modal = buildStudentSignatureModal(targetUser.id);
+            dmMessage = `🖊️ **Lifeline Academy – Enrollment Completion**\n\nHello!\n\nWe're almost done with your enrollment! We need your digital signature to complete the process. Please click the button below to provide your signature.\n\nThank you!`;
+          } else {
+            modal = buildStudentConfirmModal(targetUser.id);
+            dmMessage = `🎒 **Lifeline Academy – Information Verification**\n\nHello!\n\nWe need to verify some information in your enrollment application. Please click the button below to confirm the details.\n\nThank you!`;
+          }
+          
+          try {
+            const followUpBtn = new ButtonBuilder()
+              .setCustomId(`open_student_followup:${type}:${targetUser.id}:${interaction.user.id}`)
+              .setLabel('Complete Follow-Up')
+              .setStyle(ButtonStyle.Primary);
+            
+            const row = new ActionRowBuilder().addComponents(followUpBtn);
+            
+            await targetUser.send({ content: dmMessage, components: [row] });
+            
+            await oscarLog(guild, `📧 Student follow-up (${type}) sent to ${targetUser.tag} by ${interaction.user.tag}`);
+            return interaction.editReply({ content: `✅ Follow-up DM (${type}) sent to **${targetUser.tag}**.` });
+          } catch (e) {
+            return interaction.editReply({ content: `❌ Failed to DM ${targetUser.tag}. They may have DMs disabled.` });
+          }
+        }
+
+        if (followupSub === "student_auto") {
+          await interaction.deferReply({ ephemeral: true }).catch(() => {});
+          
+          const studentCsvPath = path.join(__dirname, "Lifeline Academy Enrollment Application (Daycare • Elementary • High School)  (Responses) - Form Responses 1.csv");
+          const students = parseCSV(studentCsvPath);
+          
+          let sentCount = 0;
+          const errors = [];
+          
+          for (const student of students) {
+            const discordTag = student['Discord Tag'] || student['Discord Tag (optional)'] || '';
+            const digitalSig = student['Digital Signature (type your full name)'] || '';
+            const age = student['Age (required)'] || '';
+            
+            if (!discordTag) continue;
+            
+            // Check if signature is missing
+            if (!digitalSig || digitalSig.trim() === '') {
+              try {
+                // Try to find user by Discord ID
+                let targetUser = null;
+                
+                // If discord_id is already stored
+                if (student.discord_id) {
+                  targetUser = await client.users.fetch(student.discord_id).catch(() => null);
+                }
+                
+                if (targetUser) {
+                  const dmMessage = `🖊️ **Lifeline Academy – Enrollment Completion**\n\nHello!\n\nWe're almost done with your enrollment! We need your digital signature to complete the process. Please click the button below to provide your signature.\n\nThank you!`;
+                  
+                  const followUpBtn = new ButtonBuilder()
+                    .setCustomId(`open_student_followup:signature:${targetUser.id}:${interaction.user.id}`)
+                    .setLabel('Complete Follow-Up')
+                    .setStyle(ButtonStyle.Primary);
+                  
+                  const row = new ActionRowBuilder().addComponents(followUpBtn);
+                  
+                  await targetUser.send({ content: dmMessage, components: [row] });
+                  sentCount++;
+                  await oscarLog(guild, `📧 Auto follow-up (signature) sent to ${targetUser.tag}`);
+                }
+              } catch (e) {
+                errors.push(`Failed to send to ${student['Student\'s Full Name (required)']}`);
+              }
+            }
+          }
+          
+          return interaction.editReply({ content: `✅ Auto-scan complete. Sent ${sentCount} follow-up(s).${errors.length ? `\n⚠️ ${errors.length} failed.` : ''}` });
+        }
       }
     }
 
