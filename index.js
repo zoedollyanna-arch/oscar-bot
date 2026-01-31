@@ -585,6 +585,38 @@ async function findRowBySlUsername(spreadsheetId, slUsername) {
   return { found: false, reason: "No matching SL username found." };
 }
 
+async function findRowByDiscordId(spreadsheetId, discordId) {
+  const sheets = await getSheetsClient();
+  const tab = await getFirstTabTitle(spreadsheetId);
+
+  const range = `${tab}!A1:ZZ2000`;
+  const res = await sheets.spreadsheets.values.get({ spreadsheetId, range });
+  const rows = res.data.values || [];
+  if (!rows.length) return { found: false, reason: "Sheet is empty." };
+
+  const headers = rows[0];
+  const idxDiscord = findHeaderIndex(headers, "discord_id");
+  if (idxDiscord < 0) return { found: false, reason: "Could not find discord_id column header." };
+
+  const target = String(discordId || "").trim().toLowerCase();
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const value = String(row[idxDiscord] || "").trim().toLowerCase();
+    if (value && value === target) {
+      return {
+        found: true,
+        tab,
+        headers,
+        row,
+        rowIndex1Based: i + 1,
+      };
+    }
+  }
+
+  return { found: false, reason: "No matching discord_id found." };
+}
+
 async function updateRowFields(spreadsheetId, tab, headers, rowIndex1Based, updates) {
   const sheets = await getSheetsClient();
 
@@ -1433,6 +1465,9 @@ function extractRecord(headers, row) {
     next_steps: get("next_steps"),
     staff_notes: get("staff_notes"),
     last_updated: get("last_updated"),
+    positions_applying_for: get("Positions Applying For"),
+    digital_signature: get("Digital Signature (type your full name)"),
+    student_name: get("Student's Full Name (required)"),
   };
 }
 
@@ -1580,114 +1615,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         
         await interaction.showModal(modal);
-        return;
-      }
-
-      return;
-    }
-
-    // Modal Submissions
-    if (interaction.isModalSubmit()) {
-      const [kind, userId] = interaction.customId.split(":");
-      const guild = interaction.guild;
-
-      if (kind === "teacher_followup") {
-        const primaryRole = interaction.fields.getTextInputValue('primary_role');
-        const workshops = interaction.fields.getTextInputValue('workshops');
-        const skills = interaction.fields.getTextInputValue('skills');
-        const availability = interaction.fields.getTextInputValue('availability');
-        const leepGoal = interaction.fields.getTextInputValue('leep_goal');
-
-        await interaction.reply({ ephemeral: true, content: "✅ Thank you! Your follow-up has been submitted and logged." });
-
-        // Log to #academy-operations
-        const embed = new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle('🎓 Teacher Follow-Up Submitted')
-          .setDescription(`Follow-up completed by ${interaction.user}`)
-          .addFields(
-            { name: 'Applicant', value: `${interaction.user.tag} (${interaction.user.id})`, inline: false },
-            { name: 'Primary Role', value: safeSlice(primaryRole, 1024) || 'N/A', inline: false },
-            { name: 'Workshop Interest', value: safeSlice(workshops, 1024) || 'None specified', inline: false },
-            { name: 'Tech Skills', value: safeSlice(skills, 1024) || 'None specified', inline: false },
-            { name: 'Availability', value: safeSlice(availability, 1024) || 'N/A', inline: false },
-            { name: 'LEEP Goal', value: safeSlice(leepGoal, 1024) || 'None specified', inline: false },
-            { name: 'Status', value: '✅ Follow-Up Complete', inline: false }
-          )
-          .setTimestamp();
-
-        await logToAcademyOps(guild, embed);
-        await oscarLog(guild, `📋 Teacher follow-up submitted by ${interaction.user.tag}`);
-
-        // Update Google Sheet
-        try {
-          const result = await findRowBySlUsername(TEACHER_SHEET_ID, ''); // We need to find by discord_id instead
-          // For now, just log it. You can enhance this to update the sheet with the responses
-        } catch (e) {
-          console.error('Failed to update sheet:', e);
-        }
-
-        return;
-      }
-
-      if (kind === "student_signature") {
-        const studentName = interaction.fields.getTextInputValue('student_name');
-        const parentName = interaction.fields.getTextInputValue('parent_name');
-        const signature = interaction.fields.getTextInputValue('signature');
-        const agreement = interaction.fields.getTextInputValue('agreement');
-
-        await interaction.reply({ ephemeral: true, content: "✅ Thank you! Your signature has been recorded and enrollment is being finalized." });
-
-        // Log to #academy-operations
-        const embed = new EmbedBuilder()
-          .setColor(0x57F287)
-          .setTitle('🎒 Student Enrollment Update Submitted')
-          .setDescription(`Signature completed by ${interaction.user}`)
-          .addFields(
-            { name: 'Student Name', value: safeSlice(studentName, 1024), inline: false },
-            { name: 'Parent/Guardian', value: safeSlice(parentName, 1024), inline: false },
-            { name: 'Update Type', value: 'Digital Signature', inline: true },
-            { name: 'Agreement', value: agreement.toLowerCase() === 'yes' ? '✅ Confirmed' : '⚠️ Not confirmed', inline: true },
-            { name: 'Timestamp', value: nowISO(), inline: false },
-            { name: 'Logged For', value: 'Records & Receipts', inline: false }
-          )
-          .setTimestamp();
-
-        await logToAcademyOps(guild, embed);
-        await oscarLog(guild, `🖊️ Student signature submitted by ${interaction.user.tag} for ${studentName}`);
-
-        return;
-      }
-
-      if (kind === "student_confirm") {
-        const studentName = interaction.fields.getTextInputValue('student_name');
-        const studentAge = interaction.fields.getTextInputValue('student_age');
-        const parentName = interaction.fields.getTextInputValue('parent_name');
-        const confirmAccurate = interaction.fields.getTextInputValue('confirm_accurate');
-        const notes = interaction.fields.getTextInputValue('notes');
-
-        await interaction.reply({ ephemeral: true, content: "✅ Thank you! Your information has been verified and recorded." });
-
-        // Log to #academy-operations
-        const embed = new EmbedBuilder()
-          .setColor(0x57F287)
-          .setTitle('🎒 Student Enrollment Update Submitted')
-          .setDescription(`Information verified by ${interaction.user}`)
-          .addFields(
-            { name: 'Student Name', value: safeSlice(studentName, 1024), inline: false },
-            { name: 'Student Age', value: safeSlice(studentAge, 100), inline: true },
-            { name: 'Parent/Guardian', value: safeSlice(parentName, 1024), inline: false },
-            { name: 'Update Type', value: 'Age Confirmation', inline: true },
-            { name: 'Confirmed', value: confirmAccurate.toLowerCase() === 'yes' ? '✅ Yes' : '⚠️ Not confirmed', inline: true },
-            { name: 'Notes', value: safeSlice(notes, 1024) || 'None', inline: false },
-            { name: 'Timestamp', value: nowISO(), inline: false },
-            { name: 'Logged For', value: 'Records & Receipts', inline: false }
-          )
-          .setTimestamp();
-
-        await logToAcademyOps(guild, embed);
-        await oscarLog(guild, `✅ Student info confirmed by ${interaction.user.tag} for ${studentName}`);
-
         return;
       }
 
@@ -2090,18 +2017,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
           
           await interaction.deferReply({ ephemeral: true }).catch(() => {});
           
-          // Look up teacher in CSV or Sheet
-          const teacherCsvPath = path.join(__dirname, "_🎓Lifeline Academy (Teacher & Staff Application) (Responses) - Form Responses 1.csv");
-          const teachers = parseCSV(teacherCsvPath);
+          // Look up teacher in Google Sheet by discord_id
+          const result = await findRowByDiscordId(TEACHER_SHEET_ID, targetUser.id);
           
-          // Find by discord_id
-          const teacher = teachers.find(t => t.discord_id && t.discord_id.toLowerCase() === targetUser.id.toLowerCase());
-          
-          if (!teacher) {
+          if (!result.found) {
             return interaction.editReply({ content: `❌ Could not find teacher application for ${targetUser.tag}. Make sure they're registered with /academy register-discord.` });
           }
           
-          const roles = detectTeacherRoles(teacher['Positions Applying For']);
+          const record = extractRecord(result.headers, result.row);
+          const roles = detectTeacherRoles(record['Positions Applying For'] || record['positions_applying_for'] || '');
           const modal = buildTeacherFollowUpModal(targetUser.id, roles);
           
           // Send modal via DM
@@ -2161,29 +2085,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (followupSub === "student_auto") {
           await interaction.deferReply({ ephemeral: true }).catch(() => {});
           
-          const studentCsvPath = path.join(__dirname, "Lifeline Academy Enrollment Application (Daycare • Elementary • High School)  (Responses) - Form Responses 1.csv");
-          const students = parseCSV(studentCsvPath);
+          // Scan Google Sheet for students with missing signatures
+          const sheets = await getSheetsClient();
+          const tab = await getFirstTabTitle(STUDENT_SHEET_ID);
+          const range = `${tab}!A1:ZZ2000`;
+          const res = await sheets.spreadsheets.values.get({ spreadsheetId: STUDENT_SHEET_ID, range });
+          const rows = res.data.values || [];
           
+          if (!rows.length) {
+            return interaction.editReply({ content: '❌ Student sheet is empty.' });
+          }
+          
+          const headers = rows[0];
           let sentCount = 0;
           const errors = [];
           
-          for (const student of students) {
-            const discordTag = student['Discord Tag'] || student['Discord Tag (optional)'] || '';
-            const digitalSig = student['Digital Signature (type your full name)'] || '';
-            const age = student['Age (required)'] || '';
-            
-            if (!discordTag) continue;
+          for (let i = 1; i < rows.length; i++) {
+            const row = rows[i] || [];
+            const record = extractRecord(headers, row);
             
             // Check if signature is missing
-            if (!digitalSig || digitalSig.trim() === '') {
+            if (record.discord_id && (!record.digital_signature || record.digital_signature.trim() === '')) {
               try {
-                // Try to find user by Discord ID
-                let targetUser = null;
-                
-                // If discord_id is already stored
-                if (student.discord_id) {
-                  targetUser = await client.users.fetch(student.discord_id).catch(() => null);
-                }
+                const targetUser = await client.users.fetch(record.discord_id).catch(() => null);
                 
                 if (targetUser) {
                   const dmMessage = `🖊️ **Lifeline Academy – Enrollment Completion**\n\nHello!\n\nWe're almost done with your enrollment! We need your digital signature to complete the process. Please click the button below to provide your signature.\n\nThank you!`;
@@ -2193,14 +2117,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
                     .setLabel('Complete Follow-Up')
                     .setStyle(ButtonStyle.Primary);
                   
-                  const row = new ActionRowBuilder().addComponents(followUpBtn);
+                  const rowComp = new ActionRowBuilder().addComponents(followUpBtn);
                   
-                  await targetUser.send({ content: dmMessage, components: [row] });
+                  await targetUser.send({ content: dmMessage, components: [rowComp] });
                   sentCount++;
                   await oscarLog(guild, `📧 Auto follow-up (signature) sent to ${targetUser.tag}`);
                 }
               } catch (e) {
-                errors.push(`Failed to send to ${student['Student\'s Full Name (required)']}`);
+                errors.push(`Failed to send to ${record.student_name || 'Unknown'}`);
               }
             }
           }
