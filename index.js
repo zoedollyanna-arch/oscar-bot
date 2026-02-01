@@ -115,10 +115,6 @@ const {
 
 const { google } = require("googleapis");
 
-// -------------------- OSCAR CLASSROOM SYSTEM --------------------
-const { OscarBot } = require("./managers/oscar-bot");
-let oscarBotInstance = null;
-
 // -------------------- ENV --------------------
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN || "";
 const CLIENT_ID = process.env.CLIENT_ID || "";
@@ -1424,10 +1420,6 @@ async function registerCommands() {
   
   // Get Oscar classroom commands from the initialized instance
   let allCommands = [...commandDefs];
-  if (oscarBotInstance) {
-    const classroomCmds = oscarBotInstance.registerCommands();
-    allCommands = [...allCommands, ...classroomCmds.map((c) => c.toJSON())];
-  }
   
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: allCommands });
   console.log(`✅ Oscar commands registered (guild scope). Total commands: ${allCommands.length}`);
@@ -1835,14 +1827,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           content: "❌ Assignments must be created inside a teacher thread in the academy classes channel.",
         });
       }
-      if (oscarBotInstance) {
-        return oscarBotInstance.handleSlashCommand(interaction);
-      } else {
-        return interaction.reply({
-          ephemeral: true,
-          content: "❌ Oscar classroom system not yet initialized. Try again in a moment.",
-        });
-      }
+      return interaction.reply({
+        ephemeral: true,
+        content: "❌ Oscar classroom system not yet initialized. Try again in a moment.",
+      });
     }
 
     // /oscar
@@ -2728,14 +2716,6 @@ ${p.details ? `Details: ${p.details}\n` : ""}${notes ? `Notes: ${notes}\n` : ""}
 // -------------------- READY --------------------
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Oscar logged in as ${client.user.tag}`);
-
-  // Initialize Oscar Classroom System (after client is ready)
-  oscarBotInstance = new OscarBot({
-    client,
-    guildId: GUILD_ID,
-    academyCategoryIds: OSCAR_ALLOWED_CATEGORY_IDS,
-    operationsLogChannelId: OSCAR_OPERATIONS_CHANNEL_ID,
-  });
 
   try {
     await registerCommands();
