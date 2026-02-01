@@ -1896,7 +1896,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const targetId = (interaction.options.getString("target_id") || "").trim();
         const embed = embedBase(title, msg);
 
-        if (targetType === "global") {
+        if (targetType === "global" || !targetType) {
           const ch = await fetchTextChannel(guild, OSCAR_ANNOUNCE_CHANNEL_ID);
           if (!ch) {
             return interaction.reply({ ephemeral: true, content: "❌ Announcement channel not available." });
@@ -1907,26 +1907,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
         }
 
-        if (targetType === "class") {
+        if (targetType === "class" || targetType === "thread") {
           if (!targetId) {
-            return interaction.reply({ ephemeral: true, content: "❌ Please provide a class channel or thread ID." });
+            return interaction.reply({ ephemeral: true, content: "❌ Please provide a channel or thread ID." });
           }
 
-          const targetChannel = await guild.channels.fetch(targetId).catch(() => null);
+          const targetChannel = await client.channels.fetch(targetId).catch(() => null);
+          if (!targetChannel) {
+            return interaction.reply({
+              ephemeral: true,
+              content: "❌ Channel or thread not found. Verify the ID is correct.",
+            });
+          }
+
           const isThread = !!targetChannel?.isThread?.();
           const isTextChannel =
             targetChannel?.type === ChannelType.GuildText ||
             targetChannel?.type === ChannelType.GuildAnnouncement;
 
-          if (!targetChannel || (!isThread && !isTextChannel)) {
+          if (!isThread && !isTextChannel) {
             return interaction.reply({
               ephemeral: true,
-              content: "❌ Invalid class target. Provide a valid channel or thread ID.",
+              content: "❌ Invalid target. Must be a text channel or thread.",
             });
           }
 
           await targetChannel.send({ embeds: [embed] });
-          await oscarLog(guild, `📣 Announcement (class) by ${interaction.user.tag}: ${title} -> ${targetChannel.id}`);
+          await oscarLog(guild, `📣 Announcement (${targetType}) by ${interaction.user.tag}: ${title} -> ${targetChannel.id}`);
           return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
         }
 
@@ -1935,38 +1942,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
             return interaction.reply({ ephemeral: true, content: "❌ Please provide a role ID." });
           }
 
-          const role = await guild.roles.fetch(targetId).catch(() => null);
-          if (!role) {
-            return interaction.reply({ ephemeral: true, content: "❌ Invalid role ID." });
-          }
-
-          const ch = (await fetchTextChannel(guild, OSCAR_ANNOUNCE_CHANNEL_ID)) || interaction.channel;
-          if (!ch || ch.type !== ChannelType.GuildText) {
+          const ch = await fetchTextChannel(guild, OSCAR_ANNOUNCE_CHANNEL_ID);
+          if (!ch) {
             return interaction.reply({ ephemeral: true, content: "❌ Announcement channel not available." });
           }
 
           const mentions = [
             ...(pingEveryone ? ["@everyone"] : []),
-            `<@&${role.id}>`,
+            `<@&${targetId}>`,
           ];
 
           await ch.send({ content: mentions.join(" "), embeds: [embed] });
-          await oscarLog(guild, `📣 Announcement (${targetType}) by ${interaction.user.tag}: ${title} -> ${role.id}`);
-          return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
-        }
-
-        if (targetType === "thread") {
-          if (!targetId) {
-            return interaction.reply({ ephemeral: true, content: "❌ Please provide a thread ID." });
-          }
-
-          const thread = await guild.channels.fetch(targetId).catch(() => null);
-          if (!thread || !thread.isThread?.()) {
-            return interaction.reply({ ephemeral: true, content: "❌ Invalid thread ID." });
-          }
-
-          await thread.send({ embeds: [embed] });
-          await oscarLog(guild, `📣 Announcement (thread) by ${interaction.user.tag}: ${title} -> ${thread.id}`);
+          await oscarLog(guild, `📣 Announcement (${targetType}) by ${interaction.user.tag}: ${title} -> role ${targetId}`);
           return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
         }
 
