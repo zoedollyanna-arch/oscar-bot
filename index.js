@@ -115,6 +115,10 @@ const {
 
 const { google } = require("googleapis");
 
+// -------------------- OSCAR CLASSROOM SYSTEM --------------------
+const { OscarBot } = require("./managers/oscar-bot");
+let oscarBotInstance = null;
+
 // -------------------- ENV --------------------
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN || "";
 const CLIENT_ID = process.env.CLIENT_ID || "";
@@ -143,6 +147,7 @@ const OSCAR_PARENT_NOTICES_CHANNEL_ID = process.env.OSCAR_PARENT_NOTICES_CHANNEL
 const OSCAR_FACULTY_LOUNGE_CHANNEL_ID = process.env.OSCAR_FACULTY_LOUNGE_CHANNEL_ID || "";
 const OSCAR_RECORDS_CHANNEL_ID = process.env.OSCAR_RECORDS_CHANNEL_ID || "";
 const OSCAR_OPERATIONS_CHANNEL_ID = process.env.OSCAR_OPERATIONS_CHANNEL_ID || "";
+const OSCAR_CLASSES_CHANNEL_ID = process.env.OSCAR_CLASSES_CHANNEL_ID || "";
 
 // Roles
 const OSCAR_ADMIN_ROLE_ID = process.env.OSCAR_ADMIN_ROLE_ID || "";
@@ -307,8 +312,22 @@ function isNurse(member) {
 // -------------------- SCOPE GUARD --------------------
 function inAllowedAcademyScope(channel) {
   if (!channel) return false;
+  if (channel.isThread && channel.isThread()) {
+    const parent = channel.parent;
+    if (!parent) return false;
+    return inAllowedAcademyScope(parent);
+  }
   if (!OSCAR_ALLOWED_CATEGORY_IDS.length) return true;
   return !!channel.parentId && OSCAR_ALLOWED_CATEGORY_IDS.includes(channel.parentId);
+}
+
+function isAcademyClassThread(channel) {
+  if (!channel || !(channel.isThread && channel.isThread())) return false;
+  const parent = channel.parent;
+  if (!parent) return false;
+  if (OSCAR_CLASSES_CHANNEL_ID && parent.id === OSCAR_CLASSES_CHANNEL_ID) return true;
+  const parentName = String(parent.name || "").toLowerCase();
+  return parentName.includes("academy-classes") || parentName.includes("classes");
 }
 
 function inTicketScope(channel) {
@@ -326,8 +345,32 @@ function inTicketScope(channel) {
 }
 
 function requireScopeOrReply(interaction) {
-  // Allow DMs for status checks + help
-  if (!interaction.inGuild()) return true;
+  // Allow DMs only for explicitly safe commands
+  if (!interaction.inGuild()) {
+    if (!interaction.isChatInputCommand()) return false;
+    const cmd = interaction.commandName;
+    const sub = interaction.options?.getSubcommand?.(false) || "";
+    const dmAllowed = new Set([
+      "oscar",
+      "academy",
+      "student-status",
+      "view-grades",
+      "view-assignments",
+      "announce-list",
+      "academy-profile",
+      "academy-enrollment-status",
+    ]);
+
+    if (cmd === "oscar" && ["ping", "help", "portal"].includes(sub)) return true;
+    if (cmd === "academy" && ["student-status", "teacher-status"].includes(sub)) return true;
+    if (dmAllowed.has(cmd)) return true;
+
+    interaction.reply({
+      ephemeral: true,
+      content: "🦉 This command must be used inside the Lifeline Academy category.",
+    }).catch(() => {});
+    return false;
+  }
 
   // Allow ticket channels even if not under academy category
   if (inTicketScope(interaction.channel)) return true;
@@ -1031,6 +1074,20 @@ const commandDefs = [
         .addStringOption((o) => o.setName("title").setDescription("Announcement title").setRequired(true))
         .addStringOption((o) => o.setName("message").setDescription("Announcement message").setRequired(true))
         .addBooleanOption((o) => o.setName("ping_everyone").setDescription("Ping @everyone").setRequired(false))
+        .addStringOption((o) =>
+          o
+            .setName("target_type")
+            .setDescription("Target audience (global, class, grade, role, thread)")
+            .setRequired(false)
+            .addChoices(
+              { name: "Global", value: "global" },
+              { name: "Class", value: "class" },
+              { name: "Grade", value: "grade" },
+              { name: "Role", value: "role" },
+              { name: "Thread", value: "thread" }
+            )
+        )
+        .addStringOption((o) => o.setName("target_id").setDescription("Target ID (role, channel, or thread)").setRequired(false))
     )
     .addSubcommand((s) =>
       s
@@ -1364,8 +1421,16 @@ const commandDefs = [
 // -------------------- COMMAND REGISTRATION --------------------
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commandDefs });
-  console.log("✅ Oscar commands registered (guild scope).");
+  
+  // Get Oscar classroom commands from the initialized instance
+  let allCommands = [...commandDefs];
+  if (oscarBotInstance) {
+    const classroomCmds = oscarBotInstance.registerCommands();
+    allCommands = [...allCommands, ...classroomCmds.map((c) => c.toJSON())];
+  }
+  
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: allCommands });
+  console.log(`✅ Oscar commands registered (guild scope). Total commands: ${allCommands.length}`);
 }
 
 // -------------------- DAILY SCHEDULERS --------------------
@@ -1725,6 +1790,61 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const member = interaction.member;
     const guild = interaction.guild;
 
+    // ==================== OSCAR CLASSROOM COMMANDS ====================
+    // Route all academy-* and classroom-related commands to Oscar Bot
+    // TODO: Announcements targeting (class/grade/role/thread) is stubbed in manager logic.
+    // TODO: Grade missing reminders (Master Grade Ledger) are not wired yet.
+    // TODO: Teacher thread actions need Workbook HUD progress hook (not wired).
+    const classroomCommands = [
+      // Enrollment
+      "academy-register",
+      "academy-profile",
+      "academy-roster",
+      "academy-enrollment-status",
+      // Assignment
+      "assignment-create",
+      "assignment-view",
+      "assignment-list",
+      // Submission
+      "submit-assignment",
+      "view-submissions",
+      "grade-assignment",
+      "return-work",
+      // Attendance
+      "check-in",
+      "attendance-log",
+      "attendance-view",
+      // Announcement
+      "announce",
+      "announce-list",
+      // Teacher Thread
+      "class-status",
+      "flag-student",
+      "add-student-note",
+      // Portal
+      "student-status",
+      "view-grades",
+      "view-assignments",
+      "link-parent",
+    ];
+
+    if (classroomCommands.includes(interaction.commandName)) {
+      if (interaction.commandName === "assignment-create" && !isAcademyClassThread(interaction.channel)) {
+        return interaction.reply({
+          ephemeral: true,
+          content: "❌ Assignments must be created inside a teacher thread in the academy classes channel.",
+        });
+      }
+      if (oscarBotInstance) {
+        return oscarBotInstance.handleSlashCommand(interaction);
+      } else {
+        return interaction.reply({
+          ephemeral: true,
+          content: "❌ Oscar classroom system not yet initialized. Try again in a moment.",
+        });
+      }
+    }
+
     // /oscar
     if (interaction.commandName === "oscar") {
       const sub = interaction.options.getSubcommand(false);
@@ -1784,14 +1904,85 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const msg = safeSlice(interaction.options.getString("message", true), 3500);
         const pingEveryone = interaction.options.getBoolean("ping_everyone") || false;
 
-        const ch = (await fetchTextChannel(guild, OSCAR_ANNOUNCE_CHANNEL_ID)) || interaction.channel;
-        if (!ch || ch.type !== ChannelType.GuildText) {
-          return interaction.reply({ ephemeral: true, content: "❌ Announcement channel not available." });
+        const targetType = (interaction.options.getString("target_type") || "global").toLowerCase();
+        const targetId = (interaction.options.getString("target_id") || "").trim();
+        const embed = embedBase(title, msg);
+
+        if (targetType === "global") {
+          const ch = await fetchTextChannel(guild, OSCAR_ANNOUNCE_CHANNEL_ID);
+          if (!ch) {
+            return interaction.reply({ ephemeral: true, content: "❌ Announcement channel not available." });
+          }
+
+          await ch.send({ content: pingEveryone ? "@everyone" : undefined, embeds: [embed] });
+          await oscarLog(guild, `📣 Announcement (global) by ${interaction.user.tag}: ${title}`);
+          return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
         }
 
-        await ch.send({ content: pingEveryone ? "@everyone" : undefined, embeds: [embedBase(title, msg)] });
-        await oscarLog(guild, `📣 Announcement by ${interaction.user.tag}: ${title}`);
-        return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
+        if (targetType === "class") {
+          if (!targetId) {
+            return interaction.reply({ ephemeral: true, content: "❌ Please provide a class channel or thread ID." });
+          }
+
+          const targetChannel = await guild.channels.fetch(targetId).catch(() => null);
+          const isThread = !!targetChannel?.isThread?.();
+          const isTextChannel =
+            targetChannel?.type === ChannelType.GuildText ||
+            targetChannel?.type === ChannelType.GuildAnnouncement;
+
+          if (!targetChannel || (!isThread && !isTextChannel)) {
+            return interaction.reply({
+              ephemeral: true,
+              content: "❌ Invalid class target. Provide a valid channel or thread ID.",
+            });
+          }
+
+          await targetChannel.send({ embeds: [embed] });
+          await oscarLog(guild, `📣 Announcement (class) by ${interaction.user.tag}: ${title} -> ${targetChannel.id}`);
+          return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
+        }
+
+        if (targetType === "grade" || targetType === "role") {
+          if (!targetId) {
+            return interaction.reply({ ephemeral: true, content: "❌ Please provide a role ID." });
+          }
+
+          const role = await guild.roles.fetch(targetId).catch(() => null);
+          if (!role) {
+            return interaction.reply({ ephemeral: true, content: "❌ Invalid role ID." });
+          }
+
+          const ch = (await fetchTextChannel(guild, OSCAR_ANNOUNCE_CHANNEL_ID)) || interaction.channel;
+          if (!ch || ch.type !== ChannelType.GuildText) {
+            return interaction.reply({ ephemeral: true, content: "❌ Announcement channel not available." });
+          }
+
+          const mentions = [
+            ...(pingEveryone ? ["@everyone"] : []),
+            `<@&${role.id}>`,
+          ];
+
+          await ch.send({ content: mentions.join(" "), embeds: [embed] });
+          await oscarLog(guild, `📣 Announcement (${targetType}) by ${interaction.user.tag}: ${title} -> ${role.id}`);
+          return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
+        }
+
+        if (targetType === "thread") {
+          if (!targetId) {
+            return interaction.reply({ ephemeral: true, content: "❌ Please provide a thread ID." });
+          }
+
+          const thread = await guild.channels.fetch(targetId).catch(() => null);
+          if (!thread || !thread.isThread?.()) {
+            return interaction.reply({ ephemeral: true, content: "❌ Invalid thread ID." });
+          }
+
+          await thread.send({ embeds: [embed] });
+          await oscarLog(guild, `📣 Announcement (thread) by ${interaction.user.tag}: ${title} -> ${thread.id}`);
+          return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
+        }
+
+        return interaction.reply({ ephemeral: true, content: "❌ Invalid target type." });
       }
 
       if (sub === "bulletin") {
@@ -2537,6 +2728,15 @@ ${p.details ? `Details: ${p.details}\n` : ""}${notes ? `Notes: ${notes}\n` : ""}
 // -------------------- READY --------------------
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Oscar logged in as ${client.user.tag}`);
+
+  // Initialize Oscar Classroom System (after client is ready)
+  oscarBotInstance = new OscarBot({
+    client,
+    guildId: GUILD_ID,
+    academyCategoryIds: OSCAR_ALLOWED_CATEGORY_IDS,
+    operationsLogChannelId: OSCAR_OPERATIONS_CHANNEL_ID,
+  });
+
   try {
     await registerCommands();
   } catch (e) {
