@@ -1779,6 +1779,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     if (!requireScopeOrReply(interaction)) return;
 
+    // Defer all slash commands to prevent timeout
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply({ ephemeral: true });
+    }
+
     const member = interaction.member;
     const guild = interaction.guild;
 
@@ -1839,7 +1844,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const group = interaction.options.getSubcommandGroup(false);
 
       if (sub === "ping") {
-        return interaction.reply({ ephemeral: true, content: "✅ Oscar is awake. (Academy systems online)" });
+        return interaction.editReply({ content: "✅ Oscar is awake. (Academy systems online)" });
       }
 
       if (sub === "help") {
@@ -1857,11 +1862,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
             "• `/oscar announce`\n" +
             "• `/academy approve-student` / `confirm-tuition` / `approve-teacher`\n"
         );
-        return interaction.reply({ ephemeral: true, embeds: [eb] });
+        return interaction.editReply({ embeds: [eb] });
       }
 
       if (sub === "config") {
-        if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Staff only." });
+        if (!isTeacher(member)) return interaction.editReply({ content: "❌ Staff only." });
 
         const eb = embedBase("Oscar Config", "Current environment mapping (IDs):").addFields(
           { name: "Allowed Category IDs", value: OSCAR_ALLOWED_CATEGORY_IDS.length ? OSCAR_ALLOWED_CATEGORY_IDS.join(", ") : "Not set (all channels allowed)" },
@@ -1882,11 +1887,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           { name: "Teacher Sheet", value: TEACHER_SHEET_ID || "Not set" }
         );
 
-        return interaction.reply({ ephemeral: true, embeds: [eb] });
+        return interaction.editReply({ embeds: [eb] });
       }
 
       if (sub === "announce") {
-        if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Teachers/staff only." });
+        if (!isTeacher(member)) return interaction.editReply({ content: "❌ Teachers/staff only." });
 
         const title = safeSlice(interaction.options.getString("title", true), 200);
         const msg = safeSlice(interaction.options.getString("message", true), 3500);
@@ -1899,23 +1904,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (targetType === "global" || !targetType) {
           const ch = await fetchTextChannel(guild, OSCAR_ANNOUNCE_CHANNEL_ID);
           if (!ch) {
-            return interaction.reply({ ephemeral: true, content: "❌ Announcement channel not available." });
+            return interaction.editReply({ content: "❌ Announcement channel not available." });
           }
 
           await ch.send({ content: pingEveryone ? "@everyone" : undefined, embeds: [embed] });
           await oscarLog(guild, `📣 Announcement (global) by ${interaction.user.tag}: ${title}`);
-          return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
+          return interaction.editReply({ content: "✅ Announcement posted." });
         }
 
         if (targetType === "class" || targetType === "thread") {
           if (!targetId) {
-            return interaction.reply({ ephemeral: true, content: "❌ Please provide a channel or thread ID." });
+            return interaction.editReply({ content: "❌ Please provide a channel or thread ID." });
           }
 
           const targetChannel = await client.channels.fetch(targetId).catch(() => null);
           if (!targetChannel) {
-            return interaction.reply({
-              ephemeral: true,
+            return interaction.editReply({
               content: "❌ Channel or thread not found. Verify the ID is correct.",
             });
           }
@@ -1926,25 +1930,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
             targetChannel?.type === ChannelType.GuildAnnouncement;
 
           if (!isThread && !isTextChannel) {
-            return interaction.reply({
-              ephemeral: true,
+            return interaction.editReply({
               content: "❌ Invalid target. Must be a text channel or thread.",
             });
           }
 
           await targetChannel.send({ embeds: [embed] });
           await oscarLog(guild, `📣 Announcement (${targetType}) by ${interaction.user.tag}: ${title} -> ${targetChannel.id}`);
-          return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
+          return interaction.editReply({ content: "✅ Announcement posted." });
         }
 
         if (targetType === "grade" || targetType === "role") {
           if (!targetId) {
-            return interaction.reply({ ephemeral: true, content: "❌ Please provide a role ID." });
+            return interaction.editReply({ content: "❌ Please provide a role ID." });
           }
 
           const ch = await fetchTextChannel(guild, OSCAR_ANNOUNCE_CHANNEL_ID);
           if (!ch) {
-            return interaction.reply({ ephemeral: true, content: "❌ Announcement channel not available." });
+            return interaction.editReply({ content: "❌ Announcement channel not available." });
           }
 
           const mentions = [
@@ -1954,48 +1957,48 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           await ch.send({ content: mentions.join(" "), embeds: [embed] });
           await oscarLog(guild, `📣 Announcement (${targetType}) by ${interaction.user.tag}: ${title} -> role ${targetId}`);
-          return interaction.reply({ ephemeral: true, content: "✅ Announcement posted." });
+          return interaction.editReply({ content: "✅ Announcement posted." });
         }
 
-        return interaction.reply({ ephemeral: true, content: "❌ Invalid target type." });
+        return interaction.editReply({ content: "❌ Invalid target type." });
       }
 
       if (sub === "bulletin") {
-        if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Teachers/staff only." });
+        if (!isTeacher(member)) return interaction.editReply({ content: "❌ Teachers/staff only." });
 
         const msg = safeSlice(interaction.options.getString("message", true), 3500);
         const ch = (await fetchTextChannel(guild, OSCAR_CALENDAR_CHANNEL_ID)) || interaction.channel;
         if (!ch || ch.type !== ChannelType.GuildText) {
-          return interaction.reply({ ephemeral: true, content: "❌ Calendar channel not available." });
+          return interaction.editReply({ content: "❌ Calendar channel not available." });
         }
 
         await ch.send({ embeds: [embedBase("Daily Bulletin", msg)] });
         await oscarLog(guild, `📰 Bulletin posted by ${interaction.user.tag}`);
-        return interaction.reply({ ephemeral: true, content: "✅ Bulletin posted." });
+        return interaction.editReply({ content: "✅ Bulletin posted." });
       }
 
       if (sub === "welcome_post") {
-        if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Staff only." });
+        if (!isTeacher(member)) return interaction.editReply({ content: "❌ Staff only." });
         const ok = await postWelcome(guild);
-        return interaction.reply({ ephemeral: true, content: ok ? "✅ Welcome posted." : "❌ Welcome channel not set." });
+        return interaction.editReply({ content: ok ? "✅ Welcome posted." : "❌ Welcome channel not set." });
       }
 
       if (sub === "rules_post") {
-        if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Staff only." });
+        if (!isTeacher(member)) return interaction.editReply({ content: "❌ Staff only." });
         const ok = await postRules(guild);
-        return interaction.reply({ ephemeral: true, content: ok ? "✅ Rules posted." : "❌ Rules channel not set." });
+        return interaction.editReply({ content: ok ? "✅ Rules posted." : "❌ Rules channel not set." });
       }
 
       if (sub === "handbook_post") {
-        if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Staff only." });
+        if (!isTeacher(member)) return interaction.editReply({ content: "❌ Staff only." });
         const ok = await postHandbook(guild);
-        return interaction.reply({ ephemeral: true, content: ok ? "✅ Handbook posted." : "❌ Handbook channel not set." });
+        return interaction.editReply({ content: ok ? "✅ Handbook posted." : "❌ Handbook channel not set." });
       }
 
       if (sub === "enrollment_post") {
-        if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Staff only." });
+        if (!isTeacher(member)) return interaction.editReply({ content: "❌ Staff only." });
         const ok = await postEnrollment(guild);
-        return interaction.reply({ ephemeral: true, content: ok ? "✅ Enrollment posted." : "❌ Enrollment channel not set." });
+        return interaction.editReply({ content: ok ? "✅ Enrollment posted." : "❌ Enrollment channel not set." });
       }
 
       if (group === "schedule") {
@@ -2006,7 +2009,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const day = parts.weekday;
           const blocks = scheduleStore.weekSchedule?.[day] || [];
           const eb = embedBase("Today's Schedule", `**${day}**`).addFields({ name: "Blocks", value: safeSlice(scheduleToText(blocks), 1024) });
-          return interaction.reply({ ephemeral: false, embeds: [eb] });
+          return interaction.editReply({ embeds: [eb] });
         }
 
         if (schedSub === "week") {
@@ -2015,11 +2018,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const blocks = scheduleStore.weekSchedule?.[day] || [];
             eb.addFields({ name: day, value: safeSlice(scheduleToText(blocks), 1024) });
           }
-          return interaction.reply({ ephemeral: false, embeds: [eb] });
+          return interaction.editReply({ embeds: [eb] });
         }
 
         if (schedSub === "set") {
-          if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Teachers/staff only." });
+          if (!isTeacher(member)) return interaction.editReply({ content: "❌ Teachers/staff only." });
 
           const day = interaction.options.getString("day", true);
           const label = safeSlice(interaction.options.getString("label", true), 200);
@@ -2038,11 +2041,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           saveJson(FILE_SCHEDULE, scheduleStore);
 
           await oscarLog(guild, `📅 Schedule updated by ${interaction.user.tag} (${day}): ${label}`);
-          return interaction.reply({ ephemeral: true, content: `✅ Added schedule block for **${day}**.` });
+          return interaction.editReply({ content: `✅ Added schedule block for **${day}**.` });
         }
 
         if (schedSub === "clear") {
-          if (!isAdmin(member)) return interaction.reply({ ephemeral: true, content: "❌ Admin only." });
+          if (!isAdmin(member)) return interaction.editReply({ content: "❌ Admin only." });
 
           const day = interaction.options.getString("day", true);
           scheduleStore.weekSchedule[day] = [];
@@ -2050,7 +2053,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           saveJson(FILE_SCHEDULE, scheduleStore);
 
           await oscarLog(guild, `🧹 Schedule cleared for ${day} by ${interaction.user.tag}`);
-          return interaction.reply({ ephemeral: true, content: `✅ Cleared schedule for **${day}**.` });
+          return interaction.editReply({ content: `✅ Cleared schedule for **${day}**.` });
         }
       }
 
@@ -2060,11 +2063,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const eb = embedBase("RP Prompt", prompt);
 
         if (post) {
-          if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Staff only." });
+          if (!isTeacher(member)) return interaction.editReply({ content: "❌ Staff only." });
 
           const ch = (await fetchTextChannel(guild, OSCAR_STUDENT_LOUNGE_CHANNEL_ID)) || interaction.channel;
           if (!ch || ch.type !== ChannelType.GuildText) {
-            return interaction.reply({ ephemeral: true, content: "❌ Student lounge channel not available." });
+            return interaction.editReply({ content: "❌ Student lounge channel not available." });
           }
 
           await ch.send({ embeds: [eb] });
@@ -2072,10 +2075,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           saveJson(FILE_PROMPTS, promptStore);
 
           await oscarLog(guild, `🦉 Prompt posted by ${interaction.user.tag}`);
-          return interaction.reply({ ephemeral: true, content: "✅ Prompt posted." });
+          return interaction.editReply({ content: "✅ Prompt posted." });
         }
 
-        return interaction.reply({ ephemeral: true, embeds: [eb] });
+        return interaction.editReply({ embeds: [eb] });
       }
 
       if (sub === "portal") {
@@ -2086,8 +2089,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (type === "parent") url = ACADEMY_PARENT_PORTAL_URL;
         if (type === "admin") url = ACADEMY_ADMIN_PORTAL_URL;
 
-        if (!url) return interaction.reply({ ephemeral: true, content: "⚠️ Portal link not configured yet." });
-        return interaction.reply({ ephemeral: true, embeds: [embedBase("Academy Portal", `Here is the **${type}** portal link:\n${url}`)] });
+        if (!url) return interaction.editReply({ content: "⚠️ Portal link not configured yet." });
+        return interaction.editReply({ embeds: [embedBase("Academy Portal", `Here is the **${type}** portal link:\n${url}`)] });
       }
     }
 
@@ -2107,7 +2110,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // staff-only below
       if (!isTeacher(member)) {
-        return interaction.reply({ ephemeral: true, content: "❌ Staff only." });
+        return interaction.editReply({ content: "❌ Staff only." });
       }
 
       if (sub === "register-discord") {
@@ -2270,7 +2273,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const group = interaction.options.getSubcommandGroup(false);
       if (group === "followup") {
         if (!isTeacher(member)) {
-          return interaction.reply({ ephemeral: true, content: "❌ Staff only." });
+          return interaction.editReply({ content: "❌ Staff only." });
         }
 
         const followupSub = interaction.options.getSubcommand(true);
@@ -2400,7 +2403,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // /class (teacher tools)
     if (interaction.commandName === "class") {
       const sub = interaction.options.getSubcommand(true);
-      if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Teachers/staff only." });
+      if (!isTeacher(member)) return interaction.editReply({ content: "❌ Teachers/staff only." });
 
       if (sub === "attendance_start") {
         const className = safeSlice(interaction.options.getString("class_name", true), 200);
@@ -2423,14 +2426,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
 
         await oscarLog(guild, `🧾 Attendance started ${sessionId} (${className}) by ${interaction.user.tag}`);
-        return interaction.reply({ ephemeral: false, embeds: [eb] });
+        return interaction.editReply({ embeds: [eb] });
       }
 
       if (sub === "attendance_close") {
         const sessionId = interaction.options.getString("session_id", true).trim();
         const s = attendanceStore.sessions[sessionId];
-        if (!s) return interaction.reply({ ephemeral: true, content: "❌ Session not found." });
-        if (s.closedAt) return interaction.reply({ ephemeral: true, content: "⚠️ This session is already closed." });
+        if (!s) return interaction.editReply({ content: "❌ Session not found." });
+        if (s.closedAt) return interaction.editReply({ content: "⚠️ This session is already closed." });
 
         s.closedAt = nowISO();
         saveJson(FILE_ATTENDANCE, attendanceStore);
@@ -2446,14 +2449,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
 
         await oscarLog(guild, `✅ Attendance closed ${sessionId} by ${interaction.user.tag}`);
-        return interaction.reply({ ephemeral: false, embeds: [eb] });
+        return interaction.editReply({ embeds: [eb] });
       }
 
       if (sub === "timer") {
         const minutes = interaction.options.getInteger("minutes", true);
         const label = safeSlice(interaction.options.getString("label") || "Class Timer", 200);
 
-        await interaction.reply({ ephemeral: false, content: `⏳ **${label}** started for **${minutes} minute(s)**.` });
+        await interaction.editReply({ content: `⏳ **${label}** started for **${minutes} minute(s)**.` });
         setTimeout(async () => {
           try {
             await interaction.followUp({ content: `⏰ **Time's up!** (${label})` });
@@ -2466,7 +2469,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const size = interaction.options.getInteger("size", true);
         const mentionsRaw = interaction.options.getString("mentions", true);
         const ids = Array.from(mentionsRaw.matchAll(/<@!?(\d+)>/g)).map((m) => m[1]);
-        if (ids.length < size) return interaction.reply({ ephemeral: true, content: "❌ Not enough mentions for that group size." });
+        if (ids.length < size) return interaction.editReply({ content: "❌ Not enough mentions for that group size." });
 
         for (let i = ids.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
@@ -2480,7 +2483,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const eb = embedBase("Random Groups", `Group size: **${size}**`).addFields({ name: "Groups", value: safeSlice(lines.join("\n"), 1024) });
 
         await oscarLog(guild, `👥 Groups generated by ${interaction.user.tag} (${groups.length} groups)`);
-        return interaction.reply({ ephemeral: false, embeds: [eb] });
+        return interaction.editReply({ embeds: [eb] });
       }
 
       if (sub === "shoutout") {
@@ -2489,7 +2492,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const ch = (await fetchTextChannel(guild, OSCAR_PICTURES_CHANNEL_ID)) || interaction.channel;
         if (!ch || ch.type !== ChannelType.GuildText) {
-          return interaction.reply({ ephemeral: true, content: "❌ Pictures channel not available." });
+          return interaction.editReply({ content: "❌ Pictures channel not available." });
         }
 
         const eb = embedBase("Student Spotlight", `🌟 Spotlight: ${student}\n\n**Reason:** ${reason}`).addFields({
@@ -2500,7 +2503,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await ch.send({ embeds: [eb] });
         await oscarLog(guild, `🌟 Spotlight posted for ${student.tag} by ${interaction.user.tag}`);
-        return interaction.reply({ ephemeral: true, content: "✅ Spotlight posted." });
+        return interaction.editReply({ content: "✅ Spotlight posted." });
       }
 
       if (interaction.options.getSubcommandGroup(false) === "points") {
@@ -2518,7 +2521,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           saveJson(FILE_POINTS, pointsStore);
 
           await oscarLog(guild, `🏆 Points ${amount} -> ${student.tag} (${reason}) by ${interaction.user.tag}`);
-          return interaction.reply({ ephemeral: true, content: `✅ Updated points for **${student.tag}** by **${amount}**.` });
+          return interaction.editReply({ content: `✅ Updated points for **${student.tag}** by **${amount}**.` });
         }
 
         if (sub2 === "leaderboard") {
@@ -2527,12 +2530,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
             .sort((a, b) => b.total - a.total)
             .slice(0, 10);
 
-          if (!entries.length) return interaction.reply({ ephemeral: true, content: "No points recorded yet." });
+          if (!entries.length) return interaction.editReply({ content: "No points recorded yet." });
 
           const lines = entries.map((e, i) => `**${i + 1}.** <@${e.uid}> — **${e.total}** pts`);
           const eb = embedBase("Points Leaderboard", "Top students by points").addFields({ name: "Leaderboard", value: safeSlice(lines.join("\n"), 1024) });
 
-          return interaction.reply({ ephemeral: false, embeds: [eb] });
+          return interaction.editReply({ embeds: [eb] });
         }
       }
 
@@ -2554,7 +2557,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 📎 **Worksheet / Resource:** 
 ⭐ **Teacher Notes:**`;
 
-        return interaction.reply({ ephemeral: false, content });
+        return interaction.editReply({ content });
       }
 
       if (sub === "worksheet_post") {
@@ -2567,7 +2570,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 **Notes / Instructions:**
 ${notes}`;
 
-        return interaction.reply({ ephemeral: false, content });
+        return interaction.editReply({ content });
       }
     }
 
@@ -2580,14 +2583,14 @@ ${notes}`;
         const status = interaction.options.getString("status", true);
 
         const s = attendanceStore.sessions[sessionId];
-        if (!s) return interaction.reply({ ephemeral: true, content: "❌ Session not found." });
-        if (s.closedAt) return interaction.reply({ ephemeral: true, content: "⚠️ This attendance session is closed." });
+        if (!s) return interaction.editReply({ content: "❌ Session not found." });
+        if (s.closedAt) return interaction.editReply({ content: "⚠️ This attendance session is closed." });
 
         s.present[interaction.user.id] = { at: nowISO(), status };
         saveJson(FILE_ATTENDANCE, attendanceStore);
 
         await oscarLog(guild, `🧾 Attendance mark: ${interaction.user.tag} => ${status} (${sessionId})`);
-        return interaction.reply({ ephemeral: true, content: `✅ Marked **${status}** for session \`${sessionId}\`.` });
+        return interaction.editReply({ content: `✅ Marked **${status}** for session \`${sessionId}\`.` });
       }
 
       if (sub === "pass_request") {
@@ -2609,8 +2612,7 @@ ${notes}`;
         saveJson(FILE_PASSES, passStore);
 
         await oscarLog(guild, `🚪 Pass requested ${passId} by ${interaction.user.tag} (${reason})`);
-        return interaction.reply({
-          ephemeral: true,
+        return interaction.editReply({
           content: `✅ Pass request submitted.\n**Pass ID:** \`${passId}\`\nStaff will review shortly.`,
         });
       }
@@ -2630,22 +2632,22 @@ ${notes}`;
       }
 
       if (sub === "next") {
-        if (!isNurse(member)) return interaction.reply({ ephemeral: true, content: "❌ Nurse/staff only." });
+        if (!isNurse(member)) return interaction.editReply({ content: "❌ Nurse/staff only." });
 
         const next = nurseQueueStore.queue.shift();
         saveJson(FILE_NURSE_QUEUE, nurseQueueStore);
 
-        if (!next) return interaction.reply({ ephemeral: true, content: "Queue is empty." });
+        if (!next) return interaction.editReply({ content: "Queue is empty." });
 
         await oscarLog(guild, `📣 Nurse calling next: ${next.userTag}`);
-        return interaction.reply({ ephemeral: false, content: `🏥 **Nurse is ready for:** <@${next.userId}> (${next.reason})` });
+        return interaction.editReply({ content: `🏥 **Nurse is ready for:** <@${next.userId}> (${next.reason})` });
       }
     }
 
     // /staff
     if (interaction.commandName === "staff") {
       const sub = interaction.options.getSubcommand(true);
-      if (!isTeacher(member)) return interaction.reply({ ephemeral: true, content: "❌ Staff only." });
+      if (!isTeacher(member)) return interaction.editReply({ content: "❌ Staff only." });
 
       if (sub === "pass_decide") {
         const passId = interaction.options.getString("pass_id", true).trim();
@@ -2653,8 +2655,8 @@ ${notes}`;
         const notes = safeSlice(interaction.options.getString("notes") || "", 300);
 
         const p = passStore.passes[passId];
-        if (!p) return interaction.reply({ ephemeral: true, content: "❌ Pass not found." });
-        if (p.status !== "pending") return interaction.reply({ ephemeral: true, content: `⚠️ Pass already decided: ${p.status}` });
+        if (!p) return interaction.editReply({ content: "❌ Pass not found." });
+        if (p.status !== "pending") return interaction.editReply({ content: `⚠️ Pass already decided: ${p.status}` });
 
         p.status = decision;
         p.decidedAt = nowISO();
@@ -2669,13 +2671,13 @@ ${p.details ? `Details: ${p.details}\n` : ""}${notes ? `Notes: ${notes}\n` : ""}
         await client.users.fetch(p.userId).then((u) => u.send(dmText)).catch(() => {});
         await oscarLog(guild, `✅ Pass ${passId} => ${decision} by ${interaction.user.tag}`);
 
-        return interaction.reply({ ephemeral: true, content: `✅ Pass **${passId}** marked **${decision}** and applicant was notified.` });
+        return interaction.editReply({ content: `✅ Pass **${passId}** marked **${decision}** and applicant was notified.` });
       }
 
       if (sub === "export_attendance") {
         const sessionId = interaction.options.getString("session_id", true).trim();
         const s = attendanceStore.sessions[sessionId];
-        if (!s) return interaction.reply({ ephemeral: true, content: "❌ Session not found." });
+        if (!s) return interaction.editReply({ content: "❌ Session not found." });
 
         const rows = [["userId", "status", "timestamp"]];
         for (const [uid, v] of Object.entries(s.present || {})) rows.push([uid, v.status, v.at]);
@@ -2685,7 +2687,7 @@ ${p.details ? `Details: ${p.details}\n` : ""}${notes ? `Notes: ${notes}\n` : ""}
         fs.writeFileSync(tmpPath, csv, "utf8");
 
         await oscarLog(guild, `📤 Attendance exported ${sessionId} by ${interaction.user.tag}`);
-        return interaction.reply({ ephemeral: true, content: `✅ Export ready for session \`${sessionId}\`.`, files: [tmpPath] });
+        return interaction.editReply({ content: `✅ Export ready for session \`${sessionId}\`.`, files: [tmpPath] });
       }
     }
   } catch (e) {
