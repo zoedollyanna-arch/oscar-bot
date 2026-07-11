@@ -21,9 +21,9 @@ const DEFAULT_FAQS = [
   },
   {
     topic: "Cruise stays",
-    keywords: ["cruise", "cabin", "stay", "checkout", "check out", "check-in", "book cabin", "cruise stay"],
+    keywords: ["cruise", "cabin", "stay", "checkout", "check out", "check-in", "book cabin", "book a cabin", "cruise stay", "island paradise", "reserve", "reservation"],
     answer:
-      "Cruise cabins are booked in-world at the Island Paradise HUD terminals. A stay is only active once it's paid — arriving early doesn't start it. For help with an existing booking, open `/support` and pick **Cruise Help**.",
+      "To book a cabin on Lifeline Island Paradise, run `/book` in the reservations channel — it walks you through the cabin types, dates, and prices. Your stay only becomes active once it's paid, so arriving early doesn't start it. Need help with a booking you already made? Open `/support` and I'll get the team on it.",
   },
   {
     topic: "Landmarks",

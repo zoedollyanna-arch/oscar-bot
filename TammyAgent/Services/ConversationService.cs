@@ -69,7 +69,7 @@ namespace TammyAgent.Services
                             break;
                         case ActionTiers.Human:
                             await _db.CreateActionRequestAsync(convId, brainResult.ActionType, brainResult.ActionPayloadJson, ActionTiers.Human);
-                            reply = Append(reply, "That one needs a staff member directly — I've flagged it for them.");
+                            reply = Append(reply, "That one needs a member of our team personally — I've let them know so they can help you directly.");
                             break;
                         case ActionTiers.Auto:
                             // Controlled auto actions (lookups, guides, basic tickets) are represented by the

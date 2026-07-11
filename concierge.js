@@ -1,30 +1,188 @@
-// Intent router for Discord. It does not execute Lifeline workflows or duplicate slash commands;
-// it explains the next step and points members to the command owned by Lifeline Assistant.
+// Tammy's Discord helper. She doesn't run Lifeline workflows or duplicate slash commands — she
+// reads what a member is asking, answers like a friendly staff member would, and points them to the
+// right command. Replies are player-facing: warm, factual, and free of internal/staff-only wording.
 const cooldowns = new Map();
 const helpChannels = new Set(String(process.env.TAMMY_HELP_CHANNEL_IDS || "").split(",").map((x) => x.trim()).filter(Boolean));
 
 const intents = [
-  { id: "redelivery", words: ["redelivery", "redeliver", "resend", "replacement copy", "lost my product", "missing item"], reply: "For a product redelivery, use **`/redelivery`** from Lifeline Assistant. Have your Second Life username and product name ready." },
-  { id: "support", words: ["support", "help me", "not working", "broken", "bug", "technical issue", "need staff"], reply: "Use **`/support`** to open a private Lifeline support ticket. Include the product, what happened, and any error message." },
-  { id: "booking", words: ["book", "booking", "reserve", "reservation", "cabin", "suite", "cruise stay"], reply: "Use **`/book`** to start a Lifeline Island Paradise cabin booking. Staff cruise controls are handled separately after booking." },
-  { id: "application", words: ["apply", "application", "join staff", "become staff", "be a blogger", "become a blogger"], reply: "Use **`/apply staff`** for the staff team or **`/apply blogger`** for the blogger program." },
-  { id: "incident", words: ["report someone", "rule violation", "harassment", "griefing", "incident", "unsafe"], reply: "Use **`/incident`** for an OOC incident or rule violation. For immediate danger, contact an online staff member too." },
-  { id: "faq", words: ["faq", "how does lifeline work", "what is lifeline", "getting started", "new player"], reply: "Use **`/faq search`** with a topic, or **`/faq list`** to browse Lifeline Assistant's knowledge base." },
-  { id: "character", words: ["character", "character profile", "roleplay profile", "edit my character"], reply: "Use **`/character create`**, **`/character view`**, or **`/character edit`** for the character registry." },
-  { id: "suggestion", words: ["suggestion", "suggest", "idea", "feature request"], reply: "Use **`/suggest`** to send your idea to the Lifeline team." },
-  { id: "affiliate", words: ["affiliate", "partner store", "affiliate program"], reply: "Use **`/affiliate start`** for program details, **`/affiliate apply`** to apply, or **`/affiliate status`** to check an application." },
-  { id: "blogger", words: ["blogger dashboard", "blogger assignment", "submit blog", "blogger package"], reply: "Use **`/blogger dashboard`** for your overview, **`/blogger assignments`** for current work, or **`/blogger submit`** to submit a post." },
-  { id: "alerts", words: ["alerts", "notifications", "subscribe", "event alerts", "sale alerts"], reply: "Use **`/subscribe`** to choose which Lifeline alerts you receive." },
-  { id: "academy", words: ["academy", "school", "student", "teacher", "homework", "enrollment"], reply: "Use Lifeline Assistant's **`/academy`** command for Academy Digital options. In-world homework is available from the ZPad Homework app." },
-  { id: "hud_sync", words: ["profile sync failed", "hud loading", "hud is stuck", "hud stuck", "hud won't load", "hud will not load", "cloud profile"], reply: "Detach and reattach the HUD, then allow up to 30 seconds for cloud loading. If it still fails, use **`/support`**." },
-  { id: "device_sync", words: ["zpad needs hud", "zphone needs hud", "zpad needs my hud", "zphone needs my hud", "phone disconnected", "tablet disconnected", "device sync"], reply: "Wear your Lifeline HUD and wait for the ZPad/ZPhone to reconnect. The ZPhone retries after teleports and polls for the HUD automatically. Use **`/support`** if it remains disconnected." },
-  { id: "stats", words: ["stats paused", "stats not moving", "stats not decaying", "stats are not decaying", "resume stats", "pause stats"], reply: "Open the HUD **Power** menu and choose **Resume Stats** or **Pause Stats**. If the controls do not respond, detach and reattach first." },
-  { id: "jobs", words: ["get a job", "apply for a job", "zpad job", "zphone job", "clock in", "job shift"], reply: "Open the **Jobs** app on your ZPad or ZPhone, choose a job, and apply there. Once approved, return to Jobs to clock in." },
-  { id: "eats", words: ["lifeline eats", "food delivery", "order food", "delivery box", "restaurant"], reply: "Open **Eats** on the ZPad or ZPhone, place the order, and wait for the NPC delivery box. Only the ordering avatar can collect it." },
-  { id: "zfunds", words: ["zfunds", "redeem xp", "send money", "allowance", "lifeline money"], reply: "Open **ZFunds** on the ZPad or ZPhone. You can send funds or redeem XP there; XP redemption has a five-minute cooldown." },
-  { id: "insurance", words: ["insurance", "health plan", "pharmacy discount"], reply: "Open **Insurance** on your ZPhone to view or purchase a plan. Use the Pharmacy app for covered medication purchases." },
-  { id: "reset", words: ["full reset", "reset hud", "reset my hud"], reply: "Open the HUD **Power** menu and choose **Full Reset**. Try detach/reattach first; use **`/support`** if your profile still will not load." },
-  { id: "location", words: ["where is tammy", "where are you", "cruise landmark", "boarding location", "teleport to cruise", "ethereal paradise"], reply: "Tammy boards at **Ethereal Paradise (85, 129, 35)**: <http://maps.secondlife.com/secondlife/Ethereal%20Paradise/85/129/35>." },
+  {
+    id: "redelivery",
+    words: [
+      "redelivery", "redeliver", "re-deliver", "resend", "re-send", "send it again", "send again",
+      "replacement copy", "another copy", "get another copy", "lost my product", "lost product",
+      "lost my item", "lost item", "lost my hud", "lost the hud", "missing item", "missing product",
+      "didn't receive", "didnt receive", "never received", "never got", "didn't get", "didnt get", "no copy",
+    ],
+    reply: "No worries — run **`/redelivery`** and I'll get your item resent. Have your Second Life username and the product name ready so it goes to the right avatar.",
+  },
+  {
+    id: "support",
+    words: [
+      "support", "need help", "help me", "not working", "isn't working", "isnt working", "won't work",
+      "wont work", "broken", "bug", "glitch", "error", "technical issue", "need staff", "talk to staff",
+      "talk to a human", "speak to someone", "speak to staff", "open a ticket", "make a ticket",
+      "contact staff", "customer service", "who can help",
+    ],
+    reply: "I've got you — open **`/support`** and it'll start a private ticket with our team. Let us know the product, what happened, and any error you saw so we can jump straight in.",
+  },
+  {
+    id: "booking",
+    words: [
+      "book", "booking", "reserve", "reservation", "cabin", "suite", "stateroom", "cruise stay",
+      "stay on the cruise", "board the cruise", "get on the cruise", "cruise ticket", "island paradise",
+      "rent a cabin", "get a cabin", "cabin price", "cabin prices", "how much is a cabin", "how do i book",
+      "is booking open", "book a room", "room on the cruise",
+    ],
+    reply: "So glad you want to come aboard! 🌴 Head to the reservations channel and run **`/book`** to reserve your spot on Lifeline Island Paradise. It walks you through the cabin types, dates, and prices — your stay begins once it's paid.",
+  },
+  {
+    id: "application",
+    words: [
+      "apply", "application", "join staff", "become staff", "join the team", "work here", "get hired",
+      "hiring", "be a blogger", "become a blogger", "apply to blog", "staff position", "blogger program",
+    ],
+    reply: "Love that you want to get involved! Use **`/apply staff`** to join the team or **`/apply blogger`** for the blogger program. Every application is read by a real person before anyone's added.",
+  },
+  {
+    id: "incident",
+    words: [
+      "report someone", "report a player", "rule violation", "rule break", "breaking the rules", "harassment",
+      "harass", "harassed", "harassing", "being harassed", "bully", "bullied", "bullying", "griefing", "griefer",
+      "incident", "unsafe", "made me uncomfortable", "someone is bothering", "bothering me", "report a problem",
+    ],
+    reply: "Thanks for looking out for the community. Use **`/incident`** to report a rule-break or anything that made you uncomfortable — it goes straight to the team, privately. If someone's in immediate danger in-world, flag an online staff member too.",
+  },
+  {
+    id: "faq",
+    words: [
+      "faq", "how does lifeline work", "what is lifeline", "how do i start", "getting started",
+      "new player", "new here", "im new", "i'm new", "just joined", "how do i play", "where do i begin",
+    ],
+    reply: "Happy to help you find your feet! Try **`/faq search`** with what you're wondering about, or **`/faq list`** to browse the topics I keep on hand.",
+  },
+  {
+    id: "character",
+    words: [
+      "character", "character profile", "roleplay profile", "rp profile", "make a character",
+      "create a character", "edit my character", "update my character", "my character",
+    ],
+    reply: "Use **`/character create`** to set up your profile, **`/character view`** to see it, or **`/character edit`** to update it anytime.",
+  },
+  {
+    id: "suggestion",
+    words: [
+      "suggestion", "suggest", "i have an idea", "feature request", "request a feature", "feedback",
+      "could you add", "can you add", "wish you had",
+    ],
+    reply: "I'd love to hear it — drop your idea with **`/suggest`** and it goes right to the Lifeline team.",
+  },
+  {
+    id: "affiliate",
+    words: [
+      "affiliate", "affiliate program", "partner store", "become a partner", "partner with", "affiliate apply",
+      "affiliate status", "affiliate program details",
+    ],
+    reply: "Use **`/affiliate start`** for the program details, **`/affiliate apply`** to apply, or **`/affiliate status`** to check where your application stands.",
+  },
+  {
+    id: "blogger",
+    words: [
+      "blogger dashboard", "blogger assignment", "blogger assignments", "submit blog", "submit a post",
+      "blogger package", "blogger overview", "my blog assignment", "blog submission",
+    ],
+    reply: "Use **`/blogger dashboard`** for your overview, **`/blogger assignments`** for your current work, or **`/blogger submit`** when you're ready to send a post in.",
+  },
+  {
+    id: "alerts",
+    words: [
+      "alerts", "notifications", "subscribe", "unsubscribe", "event alerts", "sale alerts", "cruise updates",
+      "get notified", "stop notifications", "manage alerts",
+    ],
+    reply: "Use **`/subscribe`** to pick exactly which Lifeline alerts you get — events, sales, cruise updates, and more. You can change it whenever you like.",
+  },
+  {
+    id: "academy",
+    words: [
+      "academy", "school", "student", "enroll", "enrollment", "sign up for school", "join the academy",
+      "become a student", "teacher", "teach", "homework", "classes", "courses", "report card", "grades",
+    ],
+    reply: "Lifeline Academy Digital is our virtual roleplay school! To enroll, open the **Academy** app on your ZPad and tap **Student Apply** — once you're approved you'll get a student ID, courses, and grades. Homework lives in the **Homework** app on your ZPad.",
+  },
+  {
+    id: "hud_sync",
+    words: [
+      "profile sync failed", "profile won't load", "profile wont load", "hud loading", "hud is stuck",
+      "hud stuck", "hud won't load", "hud will not load", "hud not loading", "cloud profile", "stuck loading",
+      "profile stuck",
+    ],
+    reply: "Let's get that unstuck: detach and re-attach your Lifeline HUD, then give it up to 30 seconds to pull your profile from the cloud. If it still won't load, open **`/support`** and I'll get someone on it.",
+  },
+  {
+    id: "device_sync",
+    words: [
+      "zpad needs hud", "zphone needs hud", "zpad needs my hud", "zphone needs my hud", "phone disconnected",
+      "tablet disconnected", "device sync", "zpad won't connect", "zphone won't connect", "zpad wont connect",
+      "zphone wont connect", "wont connect", "won't connect", "zpad not connecting", "zphone not connecting",
+      "device won't connect",
+    ],
+    reply: "Wear your Lifeline HUD and give your ZPad/ZPhone a moment to reconnect — it retries automatically after teleports. If it's still disconnected after that, open **`/support`**.",
+  },
+  {
+    id: "stats",
+    words: [
+      "stats paused", "stats not moving", "stats not decaying", "stats are not decaying", "resume stats",
+      "pause stats", "stats frozen", "stats stopped", "hunger not going down", "meters not moving",
+      "meters stopped", "meter stopped", "meters frozen",
+    ],
+    reply: "Open your HUD's **Power** menu and choose **Resume Stats** (or **Pause Stats** to hold them). If the buttons don't respond, detach and re-attach the HUD first, then try again.",
+  },
+  {
+    id: "jobs",
+    words: [
+      "get a job", "find a job", "apply for a job", "zpad job", "zphone job", "clock in", "clock out",
+      "job shift", "start working", "where do i work", "how do i work",
+    ],
+    reply: "Open the **Jobs** app on your ZPad or ZPhone, pick a job, and apply right there. Once you're approved, head back to Jobs to clock in and start your shift.",
+  },
+  {
+    id: "eats",
+    words: [
+      "lifeline eats", "food delivery", "order food", "order some food", "delivery box", "restaurant", "get food",
+      "eats app", "order a meal", "food order", "order dinner", "order lunch",
+    ],
+    reply: "Open **Eats** on your ZPad or ZPhone, place your order, and wait for the delivery box to arrive. Just a heads-up — only the avatar who ordered can pick it up.",
+  },
+  {
+    id: "zfunds",
+    words: [
+      "zfunds", "redeem", "redeem xp", "send money", "send funds", "allowance", "lifeline money", "transfer money",
+      "cash out xp", "my balance", "spend xp",
+    ],
+    reply: "Open **ZFunds** on your ZPad or ZPhone — you can send funds or redeem XP right there. One note: XP redemptions have a five-minute cooldown between them.",
+  },
+  {
+    id: "insurance",
+    words: [
+      "insurance", "health plan", "health insurance", "pharmacy discount", "medical plan", "buy insurance",
+      "pharmacy",
+    ],
+    reply: "Open **Insurance** on your ZPhone to view or buy a plan, then use the **Pharmacy** app for covered medication. Easy to manage from your phone.",
+  },
+  {
+    id: "reset",
+    words: [
+      "full reset", "reset hud", "reset my hud", "hard reset", "start over", "reset my profile", "reset everything",
+    ],
+    reply: "You can do a **Full Reset** from your HUD's **Power** menu. Try a quick detach/re-attach first — and if your profile still won't load afterward, open **`/support`** so we can help.",
+  },
+  {
+    id: "location",
+    words: [
+      "where is tammy", "where are you", "where do i board", "boarding location", "cruise landmark",
+      "teleport to cruise", "how do i get there", "ethereal paradise", "where is the cruise", "landmark",
+    ],
+    reply: "Come find me! I board at **Ethereal Paradise (85, 129, 35)**: <http://maps.secondlife.com/secondlife/Ethereal%20Paradise/85/129/35>. See you there. 🌺",
+  },
 ];
 
 function normalize(text) {
@@ -55,7 +213,7 @@ async function handleMessage(message, client) {
   if ((cooldowns.get(key) || 0) > now - 30_000) return false;
   cooldowns.set(key, now);
 
-  const answer = intent?.reply || "Tell me what you need help with, or use **`/faq search`** and **`/support`** through Lifeline Assistant.";
+  const answer = intent?.reply || "Hey! Tell me what you need a hand with, or try **`/faq search`** for quick answers and **`/support`** to reach the team.";
   await message.reply({ content: `<@${message.author.id}> ${answer}`, allowedMentions: { users: [message.author.id], repliedUser: false } });
   return true;
 }
