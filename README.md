@@ -24,6 +24,14 @@ Everything coordinates through the shared Neon tables: `tammy_settings`, `tammy_
 ## Modes
 `automated` (AI answers) · `assisted` (staff answer via `/tammy im`) · `manual` (logged out for your Firestorm control) · `away` · `event` · `emergency`.
 
+The default start is the cruise boarding point at [Ethereal Paradise (85, 129, 35)](http://maps.secondlife.com/secondlife/Ethereal%20Paradise/85/129/35). Second Life may route the avatar a few meters to the parcel landing point.
+
+The Discord live bridge also acts as a lightweight concierge. It recognizes common Lifeline intents
+(redelivery, bookings, applications, incidents, HUD/device troubleshooting, jobs, Eats, ZFunds,
+Academy, and more), mentions the member, and directs them to the correct Lifeline Assistant command.
+It never registers duplicate workflow commands. Enable **Message Content Intent** for Tammy's Discord
+application, and optionally restrict responses with `TAMMY_HELP_CHANNEL_IDS`.
+
 ## Action safety tiers (AI never gets unrestricted authority)
 - **Auto**: FAQ, directions, lookups, basic ticket — Tammy does it.
 - **Approval**: add cabin guest, replace product, change booking, welcome package — queued for staff.
@@ -65,5 +73,6 @@ Blueprint or change/recreate the existing service as Docker; keep it as one web 
 | `TAMMY_MODE` | no | `automated` replies to IMs; `assisted` only logs them for staff |
 | `TAMMY_LIVE_CHANNEL_ID` | yes for feed | Discord channel receiving in-world messages and controls |
 | `TAMMY_LIVE_POLL_MS` | no | Feed polling interval; default `5000` ms |
+| `TAMMY_HELP_CHANNEL_IDS` | no | Comma-separated Discord channels where Tammy offers keyword help; empty enables all channels |
 | `PORT` | Render sets it | HTTP health-listener port (defaults to `3000` locally) |
 | `TAMMY_HEALTH_SERVER` | no | Set internally to `false` in the combined container; Node owns the port |

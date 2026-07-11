@@ -38,7 +38,9 @@ namespace TammyAgent.Services
         public SecondLifeService(string first, string last, string password, string startLocation)
         {
             _first = first; _last = last; _password = password;
-            _startLocation = string.IsNullOrWhiteSpace(startLocation) ? "last" : startLocation;
+            _startLocation = string.IsNullOrWhiteSpace(startLocation)
+                ? "Ethereal Paradise/85/129/35"
+                : startLocation;
         }
 
         private void Wire()
@@ -119,14 +121,23 @@ namespace TammyAgent.Services
             }
         }
 
-        // "last" | "home" pass through; a region name becomes uri:region&x&y&z (libomv start format).
+        // Accept last/home, a region, region/x/y/z, or a maps.secondlife.com URL.
         private static string ResolveStart(string loc)
         {
             var l = loc.Trim();
             if (l.Equals("last", StringComparison.OrdinalIgnoreCase) ||
                 l.Equals("home", StringComparison.OrdinalIgnoreCase))
                 return l.ToLowerInvariant();
-            return $"uri:{l}&128&128&30";
+            if (Uri.TryCreate(l, UriKind.Absolute, out var url) &&
+                url.Host.Equals("maps.secondlife.com", StringComparison.OrdinalIgnoreCase))
+                l = Uri.UnescapeDataString(url.AbsolutePath).Trim('/').Replace("secondlife/", "", StringComparison.OrdinalIgnoreCase);
+
+            var parts = l.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var region = parts.Length > 0 ? parts[0] : l;
+            var x = parts.Length > 1 && int.TryParse(parts[1], out var px) ? px : 128;
+            var y = parts.Length > 2 && int.TryParse(parts[2], out var py) ? py : 128;
+            var z = parts.Length > 3 && int.TryParse(parts[3], out var pz) ? pz : 30;
+            return $"uri:{region}&{x}&{y}&{z}";
         }
 
         /* ───────── Send ───────── */

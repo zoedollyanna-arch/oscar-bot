@@ -2,12 +2,17 @@ const http = require("http");
 const { Client, GatewayIntentBits, Events, PermissionFlagsBits, REST, Routes } = require("discord.js");
 const db = require("./db");
 const tammyLive = require("./tammyLive");
+const concierge = require("./concierge");
 
 require("dotenv").config();
 
 const token = process.env.DISCORD_TOKEN || "";
 const port = Number(process.env.PORT || 3000);
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [
+  GatewayIntentBits.Guilds,
+  GatewayIntentBits.GuildMessages,
+  GatewayIntentBits.MessageContent,
+] });
 
 async function removeLegacyCommands() {
   const clientId = process.env.CLIENT_ID || "";
@@ -49,6 +54,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const payload = { content: "Tammy could not process that action. Check the service logs.", flags: 64 };
     if (interaction.deferred || interaction.replied) await interaction.followUp(payload).catch(() => {});
     else await interaction.reply(payload).catch(() => {});
+  }
+});
+
+client.on(Events.MessageCreate, async (message) => {
+  try {
+    await concierge.handleMessage(message, client);
+  } catch (error) {
+    console.error("concierge response failed:", error.message);
   }
 });
 

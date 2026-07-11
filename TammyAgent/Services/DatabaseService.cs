@@ -32,7 +32,6 @@ namespace TammyAgent.Services
                 Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
                 Database = uri.AbsolutePath.TrimStart('/'),
                 SslMode = SslMode.Require,
-                TrustServerCertificate = true,
                 Pooling = true,
                 MaxPoolSize = 5,
             };
@@ -129,6 +128,28 @@ namespace TammyAgent.Services
             cmd.Parameters.AddWithValue("res", (object)(resultJson ?? "{}"));
             cmd.Parameters.AddWithValue("err", (object)error ?? DBNull.Value);
             cmd.Parameters.AddWithValue("id", id);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        public async Task RequeueDisconnectedCommandsAsync()
+        {
+            await using var conn = await _dataSource.OpenConnectionAsync();
+            await using var cmd = new NpgsqlCommand(
+                @"UPDATE tammy_commands
+                     SET status='pending', error_message=NULL, processed_at=NULL
+                   WHERE status='error' AND error_message='sl_disconnected'
+                     AND command_type IN ('send_im', 'local_chat')", conn);
+            var count = await cmd.ExecuteNonQueryAsync();
+            if (count > 0) Console.WriteLine($"[queue] restored {count} command(s) interrupted by SL disconnect.");
+        }
+
+        public async Task RequeueCommandAsync(long id, string reason)
+        {
+            await using var conn = await _dataSource.OpenConnectionAsync();
+            await using var cmd = new NpgsqlCommand(
+                @"UPDATE tammy_commands SET status='pending', error_message=@err, processed_at=NULL WHERE id=@id", conn);
+            cmd.Parameters.AddWithValue("id", id);
+            cmd.Parameters.AddWithValue("err", reason);
             await cmd.ExecuteNonQueryAsync();
         }
 

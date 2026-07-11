@@ -17,7 +17,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=dotnet-build /app/tammy ./TammyAgent
 COPY --from=node-deps /app/node_modules ./node_modules
-COPY package.json index.js db.js tammyLive.js ./
+COPY package.json index.js db.js tammyLive.js concierge.js ./
 COPY start-services.sh ./
 RUN chmod +x ./start-services.sh
 EXPOSE 3000

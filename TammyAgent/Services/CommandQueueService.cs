@@ -20,8 +20,15 @@ namespace TammyAgent.Services
 
         public async Task RunAsync(CancellationToken ct)
         {
+            await _db.RequeueDisconnectedCommandsAsync();
             while (!ct.IsCancellationRequested)
             {
+                if (!_sl.Connected)
+                {
+                    try { await Task.Delay(TimeSpan.FromSeconds(2), ct); }
+                    catch (OperationCanceledException) { }
+                    continue;
+                }
                 try
                 {
                     var commands = await _db.ClaimPendingCommandsAsync(5);
@@ -93,6 +100,12 @@ namespace TammyAgent.Services
             catch (Exception ex)
             {
                 error = ex.Message;
+            }
+            if (!ok && error == "sl_disconnected" && c.CommandType is "send_im" or "local_chat")
+            {
+                await _db.RequeueCommandAsync(c.Id, error);
+                Console.WriteLine($"[queue] {c.CommandType} #{c.Id} requeued until SL reconnects");
+                return;
             }
             await _db.CompleteCommandAsync(c.Id, ok, result, error);
             Console.WriteLine($"[queue] {c.CommandType} #{c.Id} -> {(ok ? "completed" : "error:" + error)}");
