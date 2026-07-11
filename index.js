@@ -1,5 +1,5 @@
 /**
- * Oscar Bot — Lifeline Academy (Refined for your channel layout) + LIVE Google Sheets Applications
+ * Tammy Brightwood Bot — Lifeline Academy (Refined for your channel layout) + LIVE Google Sheets Applications
  * -------------------------------------------------------------------------------------------------
  * Discord.js v14+ | Node 18+
  *
@@ -37,23 +37,23 @@
  *   CLIENT_ID=...   (Discord Developer Portal -> Application ID)
  *   GUILD_ID=...
  *
- *   OSCAR_ALLOWED_CATEGORY_IDS=ACADEMY_CATEGORY_ID (comma-separated ok)
- *   OSCAR_LOG_CHANNEL_ID=... (recommended)
+ *   TAMMY_ALLOWED_CATEGORY_IDS=ACADEMY_CATEGORY_ID (comma-separated ok)
+ *   TAMMY_LOG_CHANNEL_ID=... (recommended)
  *
  * REQUIRED Channel Targets (recommended):
- *   OSCAR_WELCOME_CHANNEL_ID=
- *   OSCAR_RULES_CHANNEL_ID=
- *   OSCAR_ANNOUNCE_CHANNEL_ID=
- *   OSCAR_CALENDAR_CHANNEL_ID=
- *   OSCAR_HANDBOOK_CHANNEL_ID=
- *   OSCAR_ENROLL_CHANNEL_ID=
- *   OSCAR_STUDENT_LOUNGE_CHANNEL_ID=
- *   OSCAR_PICTURES_CHANNEL_ID=
+ *   TAMMY_WELCOME_CHANNEL_ID=
+ *   TAMMY_RULES_CHANNEL_ID=
+ *   TAMMY_ANNOUNCE_CHANNEL_ID=
+ *   TAMMY_CALENDAR_CHANNEL_ID=
+ *   TAMMY_HANDBOOK_CHANNEL_ID=
+ *   TAMMY_ENROLL_CHANNEL_ID=
+ *   TAMMY_STUDENT_LOUNGE_CHANNEL_ID=
+ *   TAMMY_PICTURES_CHANNEL_ID=
  *
  * Roles (recommended):
- *   OSCAR_ADMIN_ROLE_ID=
- *   OSCAR_TEACHER_ROLE_ID=
- *   OSCAR_NURSE_ROLE_ID= (optional)
+ *   TAMMY_ADMIN_ROLE_ID=
+ *   TAMMY_TEACHER_ROLE_ID=
+ *   TAMMY_NURSE_ROLE_ID= (optional)
  *
  * Optional Links:
  *   ACADEMY_HANDBOOK_URL=
@@ -64,9 +64,9 @@
  *   ACADEMY_ADMIN_PORTAL_URL=
  *
  * Daily Scheduler (optional):
- *   OSCAR_TIMEZONE=America/Los_Angeles
- *   OSCAR_DAILY_BULLETIN_HOUR=8
- *   OSCAR_DAILY_PROMPT_HOUR=9
+ *   TAMMY_TIMEZONE=America/Los_Angeles
+ *   TAMMY_DAILY_BULLETIN_HOUR=8
+ *   TAMMY_DAILY_PROMPT_HOUR=9
  *
  * GOOGLE SHEETS (LIVE) — Service Account
  *   STUDENT_SHEET_ID=...   (Google Sheet ID from URL)
@@ -75,13 +75,13 @@
  *   GOOGLE_PRIVATE_KEY=...            (from service account json "private_key" with \n preserved)
  *
  * Ticket System (pre-access):
- *   OSCAR_TICKET_CATEGORY_ID=...   (category where Oscar creates private ticket channels)
- *   OSCAR_TICKET_STAFF_ROLE_IDS=... (comma-separated role IDs that can see tickets; e.g. admin + teacher roles)
- *   OSCAR_TICKET_CHANNEL_PREFIX=academy-ticket  (optional)
+ *   TAMMY_TICKET_CATEGORY_ID=...   (category where Tammy Brightwood creates private ticket channels)
+ *   TAMMY_TICKET_STAFF_ROLE_IDS=... (comma-separated role IDs that can see tickets; e.g. admin + teacher roles)
+ *   TAMMY_TICKET_CHANNEL_PREFIX=academy-ticket  (optional)
  *
  * Notes:
- * - Oscar auto-detects the FIRST tab (worksheet) in each spreadsheet.
- * - Oscar looks for a column matching SL username using flexible header matching.
+ * - Tammy Brightwood auto-detects the FIRST tab (worksheet) in each spreadsheet.
+ * - Tammy Brightwood looks for a column matching SL username using flexible header matching.
  * - Your staff columns you added are expected (recommended headers):
  *     status, tuition_status, next_steps, staff_notes, last_updated, discord_id
  *
@@ -114,41 +114,42 @@ const {
 } = require("discord.js");
 
 const { google } = require("googleapis");
+const { v4: uuidv4 } = require("uuid");
 
 // -------------------- ENV --------------------
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN || "";
 const CLIENT_ID = process.env.CLIENT_ID || "";
 const GUILD_ID = process.env.GUILD_ID || "";
 
-const OSCAR_ALLOWED_CATEGORY_IDS = (process.env.OSCAR_ALLOWED_CATEGORY_IDS || "")
+const TAMMY_ALLOWED_CATEGORY_IDS = (process.env.TAMMY_ALLOWED_CATEGORY_IDS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
-const OSCAR_LOG_CHANNEL_ID = process.env.OSCAR_LOG_CHANNEL_ID || "";
+const TAMMY_LOG_CHANNEL_ID = process.env.TAMMY_LOG_CHANNEL_ID || "";
 
 // Channel targets (mapped to your Academy layout)
-const OSCAR_WELCOME_CHANNEL_ID = process.env.OSCAR_WELCOME_CHANNEL_ID || "";
-const OSCAR_RULES_CHANNEL_ID = process.env.OSCAR_RULES_CHANNEL_ID || "";
-const OSCAR_ANNOUNCE_CHANNEL_ID = process.env.OSCAR_ANNOUNCE_CHANNEL_ID || "";
-const OSCAR_CALENDAR_CHANNEL_ID = process.env.OSCAR_CALENDAR_CHANNEL_ID || "";
-const OSCAR_HANDBOOK_CHANNEL_ID = process.env.OSCAR_HANDBOOK_CHANNEL_ID || "";
-const OSCAR_ENROLL_CHANNEL_ID = process.env.OSCAR_ENROLL_CHANNEL_ID || "";
-const OSCAR_STUDENT_LOUNGE_CHANNEL_ID = process.env.OSCAR_STUDENT_LOUNGE_CHANNEL_ID || "";
-const OSCAR_PICTURES_CHANNEL_ID = process.env.OSCAR_PICTURES_CHANNEL_ID || "";
+const TAMMY_WELCOME_CHANNEL_ID = process.env.TAMMY_WELCOME_CHANNEL_ID || "";
+const TAMMY_RULES_CHANNEL_ID = process.env.TAMMY_RULES_CHANNEL_ID || "";
+const TAMMY_ANNOUNCE_CHANNEL_ID = process.env.TAMMY_ANNOUNCE_CHANNEL_ID || "";
+const TAMMY_CALENDAR_CHANNEL_ID = process.env.TAMMY_CALENDAR_CHANNEL_ID || "";
+const TAMMY_HANDBOOK_CHANNEL_ID = process.env.TAMMY_HANDBOOK_CHANNEL_ID || "";
+const TAMMY_ENROLL_CHANNEL_ID = process.env.TAMMY_ENROLL_CHANNEL_ID || "";
+const TAMMY_STUDENT_LOUNGE_CHANNEL_ID = process.env.TAMMY_STUDENT_LOUNGE_CHANNEL_ID || "";
+const TAMMY_PICTURES_CHANNEL_ID = process.env.TAMMY_PICTURES_CHANNEL_ID || "";
 
 // Optional channels
-const OSCAR_EVENTS_CHANNEL_ID = process.env.OSCAR_EVENTS_CHANNEL_ID || "";
-const OSCAR_PARENT_NOTICES_CHANNEL_ID = process.env.OSCAR_PARENT_NOTICES_CHANNEL_ID || "";
-const OSCAR_FACULTY_LOUNGE_CHANNEL_ID = process.env.OSCAR_FACULTY_LOUNGE_CHANNEL_ID || "";
-const OSCAR_RECORDS_CHANNEL_ID = process.env.OSCAR_RECORDS_CHANNEL_ID || "";
-const OSCAR_OPERATIONS_CHANNEL_ID = process.env.OSCAR_OPERATIONS_CHANNEL_ID || "";
-const OSCAR_CLASSES_CHANNEL_ID = process.env.OSCAR_CLASSES_CHANNEL_ID || "";
+const TAMMY_EVENTS_CHANNEL_ID = process.env.TAMMY_EVENTS_CHANNEL_ID || "";
+const TAMMY_PARENT_NOTICES_CHANNEL_ID = process.env.TAMMY_PARENT_NOTICES_CHANNEL_ID || "";
+const TAMMY_FACULTY_LOUNGE_CHANNEL_ID = process.env.TAMMY_FACULTY_LOUNGE_CHANNEL_ID || "";
+const TAMMY_RECORDS_CHANNEL_ID = process.env.TAMMY_RECORDS_CHANNEL_ID || "";
+const TAMMY_OPERATIONS_CHANNEL_ID = process.env.TAMMY_OPERATIONS_CHANNEL_ID || "";
+const TAMMY_CLASSES_CHANNEL_ID = process.env.TAMMY_CLASSES_CHANNEL_ID || "";
 
 // Roles
-const OSCAR_ADMIN_ROLE_ID = process.env.OSCAR_ADMIN_ROLE_ID || "";
-const OSCAR_TEACHER_ROLE_ID = process.env.OSCAR_TEACHER_ROLE_ID || "";
-const OSCAR_NURSE_ROLE_ID = process.env.OSCAR_NURSE_ROLE_ID || "";
+const TAMMY_ADMIN_ROLE_ID = process.env.TAMMY_ADMIN_ROLE_ID || "";
+const TAMMY_TEACHER_ROLE_ID = process.env.TAMMY_TEACHER_ROLE_ID || "";
+const TAMMY_NURSE_ROLE_ID = process.env.TAMMY_NURSE_ROLE_ID || "";
 
 // Links
 const ACADEMY_HANDBOOK_URL = process.env.ACADEMY_HANDBOOK_URL || "";
@@ -159,9 +160,9 @@ const ACADEMY_PARENT_PORTAL_URL = process.env.ACADEMY_PARENT_PORTAL_URL || "";
 const ACADEMY_ADMIN_PORTAL_URL = process.env.ACADEMY_ADMIN_PORTAL_URL || "";
 
 // Schedulers
-const OSCAR_TIMEZONE = process.env.OSCAR_TIMEZONE || "America/Los_Angeles";
-const OSCAR_DAILY_BULLETIN_HOUR = Number(process.env.OSCAR_DAILY_BULLETIN_HOUR || "8");
-const OSCAR_DAILY_PROMPT_HOUR = Number(process.env.OSCAR_DAILY_PROMPT_HOUR || "9");
+const TAMMY_TIMEZONE = process.env.TAMMY_TIMEZONE || "America/Los_Angeles";
+const TAMMY_DAILY_BULLETIN_HOUR = Number(process.env.TAMMY_DAILY_BULLETIN_HOUR || "8");
+const TAMMY_DAILY_PROMPT_HOUR = Number(process.env.TAMMY_DAILY_PROMPT_HOUR || "9");
 
 // Google Sheets
 const STUDENT_SHEET_ID = process.env.STUDENT_SHEET_ID || "";
@@ -170,9 +171,9 @@ const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ||
 const GOOGLE_PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
 
 // Tickets
-const OSCAR_TICKET_CATEGORY_ID = process.env.OSCAR_TICKET_CATEGORY_ID || "";
-const OSCAR_TICKET_CHANNEL_PREFIX = process.env.OSCAR_TICKET_CHANNEL_PREFIX || "academy-ticket";
-const OSCAR_TICKET_STAFF_ROLE_IDS = (process.env.OSCAR_TICKET_STAFF_ROLE_IDS || "")
+const TAMMY_TICKET_CATEGORY_ID = process.env.TAMMY_TICKET_CATEGORY_ID || "";
+const TAMMY_TICKET_CHANNEL_PREFIX = process.env.TAMMY_TICKET_CHANNEL_PREFIX || "academy-ticket";
+const TAMMY_TICKET_STAFF_ROLE_IDS = (process.env.TAMMY_TICKET_STAFF_ROLE_IDS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -187,8 +188,8 @@ function requireEnv(name, value) {
 requireEnv("DISCORD_TOKEN", DISCORD_TOKEN);
 requireEnv("CLIENT_ID", CLIENT_ID);
 requireEnv("GUILD_ID", GUILD_ID);
-requireEnv("OSCAR_ALLOWED_CATEGORY_IDS", OSCAR_ALLOWED_CATEGORY_IDS.join(","));
-requireEnv("OSCAR_LOG_CHANNEL_ID", OSCAR_LOG_CHANNEL_ID);
+requireEnv("TAMMY_ALLOWED_CATEGORY_IDS", TAMMY_ALLOWED_CATEGORY_IDS.join(","));
+requireEnv("TAMMY_LOG_CHANNEL_ID", TAMMY_LOG_CHANNEL_ID);
 
 requireEnv("STUDENT_SHEET_ID", STUDENT_SHEET_ID);
 requireEnv("TEACHER_SHEET_ID", TEACHER_SHEET_ID);
@@ -199,12 +200,13 @@ requireEnv("GOOGLE_PRIVATE_KEY", GOOGLE_PRIVATE_KEY ? "set" : "");
 const DATA_DIR = path.join(__dirname, "data");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const FILE_SCHEDULE = path.join(DATA_DIR, "oscar_schedule.json");
-const FILE_PROMPTS = path.join(DATA_DIR, "oscar_prompts.json");
-const FILE_POINTS = path.join(DATA_DIR, "oscar_points.json");
-const FILE_ATTENDANCE = path.join(DATA_DIR, "oscar_attendance.json");
-const FILE_PASSES = path.join(DATA_DIR, "oscar_passes.json");
-const FILE_NURSE_QUEUE = path.join(DATA_DIR, "oscar_nurse_queue.json");
+const FILE_SCHEDULE = path.join(DATA_DIR, "tammy_schedule.json");
+const FILE_PROMPTS = path.join(DATA_DIR, "tammy_prompts.json");
+const FILE_POINTS = path.join(DATA_DIR, "tammy_points.json");
+const FILE_ATTENDANCE = path.join(DATA_DIR, "tammy_attendance.json");
+const FILE_PASSES = path.join(DATA_DIR, "tammy_passes.json");
+const FILE_NURSE_QUEUE = path.join(DATA_DIR, "tammy_nurse_queue.json");
+const FILE_OUTREACH = path.join(DATA_DIR, "tammy_outreach.json");
 
 // -------------------- JSON HELPERS --------------------
 function loadJson(filePath, fallback) {
@@ -240,6 +242,73 @@ function safeSlice(s, max) {
   return String(s || "").slice(0, max);
 }
 
+function replyEphemeral(interaction, payload) {
+  if (interaction.deferred || interaction.replied) {
+    return interaction.editReply(payload);
+  }
+  return interaction.reply({ ...payload, ephemeral: true });
+}
+
+function saveOutreachStore() {
+  saveJson(FILE_OUTREACH, outreachStore);
+}
+
+function addOutreachLog(record) {
+  outreachStore.messages.push(record);
+  saveOutreachStore();
+}
+
+function findOutreachLogById(id) {
+  return outreachStore.messages.find((m) => m.id === id) || null;
+}
+
+function buildOutreachModal(staffId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`tammy_outreach_custom:${staffId}`)
+    .setTitle("Tammy Brightwood Message");
+
+  const subject = new TextInputBuilder()
+    .setCustomId("subject")
+    .setLabel("Subject")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(OUTREACH_MAX_SUBJECT);
+
+  const body = new TextInputBuilder()
+    .setCustomId("body")
+    .setLabel("Message Body")
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true)
+    .setMaxLength(OUTREACH_MAX_BODY);
+
+  const notes = new TextInputBuilder()
+    .setCustomId("notes")
+    .setLabel("Extra Notes (Optional)")
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(false)
+    .setMaxLength(OUTREACH_MAX_NOTES);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(subject),
+    new ActionRowBuilder().addComponents(body),
+    new ActionRowBuilder().addComponents(notes)
+  );
+
+  return modal;
+}
+
+function buildOutreachEmbed({ categoryKey, subject, body, extraNotes }) {
+  const categoryLabel = OUTREACH_CATEGORY_LABELS[categoryKey] || categoryKey || "Update";
+  const descParts = [`**${categoryLabel}**`, `**Subject:** ${subject}`, "", body];
+  const embed = embedBase("🦉 Lifeline Academy Outreach", descParts.join("\n"));
+
+  if (extraNotes) {
+    embed.addFields({ name: "Extra Notes", value: safeSlice(extraNotes, OUTREACH_MAX_NOTES) });
+  }
+
+  return embed;
+}
+
 // -------------------- STORES --------------------
 const scheduleStore = loadJson(FILE_SCHEDULE, {
   weekSchedule: { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] },
@@ -261,6 +330,51 @@ const pointsStore = loadJson(FILE_POINTS, { points: {} });
 const attendanceStore = loadJson(FILE_ATTENDANCE, { sessions: {} });
 const passStore = loadJson(FILE_PASSES, { passes: {} });
 const nurseQueueStore = loadJson(FILE_NURSE_QUEUE, { queue: [] });
+const outreachStore = loadJson(FILE_OUTREACH, { messages: [] });
+
+const OUTREACH_COOLDOWN_MS = 3500;
+const OUTREACH_MAX_SUBJECT = 100;
+const OUTREACH_MAX_BODY = 2000;
+const OUTREACH_MAX_NOTES = 1000;
+
+const outreachCooldownByStaff = new Map();
+const pendingOutreachByStaff = new Map();
+
+const OUTREACH_CATEGORY_LABELS = {
+  enrollment: "Enrollment Update",
+  missing_info: "Missing Information",
+  accepted: "Accepted",
+  rejected: "Rejected",
+  reminder: "Reminder",
+};
+
+const OUTREACH_PRESETS = {
+  enrollment: {
+    subject: "Enrollment Update",
+    body:
+      "We received your application and it is currently under review. If we need anything else, we will reach out soon.",
+  },
+  missing_info: {
+    subject: "Missing Information",
+    body:
+      "We are missing some required details to complete your application. Please reply with the missing information or ask if you have questions.",
+  },
+  accepted: {
+    subject: "Application Accepted",
+    body:
+      "Congratulations! Your application has been accepted. A staff member will follow up with next steps shortly.",
+  },
+  rejected: {
+    subject: "Application Update",
+    body:
+      "Thank you for applying. At this time, we are unable to move forward with your application. You may reapply in the future.",
+  },
+  reminder: {
+    subject: "Friendly Reminder",
+    body:
+      "This is a friendly reminder regarding your application. Please review your status or reach out if you need assistance.",
+  },
+};
 
 // -------------------- CLIENT --------------------
 const client = new Client({
@@ -275,10 +389,10 @@ const client = new Client({
 });
 
 // -------------------- LOGGING --------------------
-async function oscarLog(guild, message) {
+async function tammyLog(guild, message) {
   try {
-    if (!OSCAR_LOG_CHANNEL_ID) return;
-    const ch = await guild.channels.fetch(OSCAR_LOG_CHANNEL_ID).catch(() => null);
+    if (!TAMMY_LOG_CHANNEL_ID) return;
+    const ch = await guild.channels.fetch(TAMMY_LOG_CHANNEL_ID).catch(() => null);
     if (!ch || ch.type !== ChannelType.GuildText) return;
     await ch.send({ content: safeSlice(message, 1900) });
   } catch {}
@@ -292,17 +406,17 @@ function hasRole(member, roleId) {
 
 function isAdmin(member) {
   return (
-    hasRole(member, OSCAR_ADMIN_ROLE_ID) ||
+    hasRole(member, TAMMY_ADMIN_ROLE_ID) ||
     member?.permissions?.has?.(PermissionsBitField.Flags.Administrator)
   );
 }
 
 function isTeacher(member) {
-  return hasRole(member, OSCAR_TEACHER_ROLE_ID) || isAdmin(member);
+  return hasRole(member, TAMMY_TEACHER_ROLE_ID) || isAdmin(member);
 }
 
 function isNurse(member) {
-  return hasRole(member, OSCAR_NURSE_ROLE_ID) || isTeacher(member);
+  return hasRole(member, TAMMY_NURSE_ROLE_ID) || isTeacher(member);
 }
 
 // -------------------- SCOPE GUARD --------------------
@@ -313,15 +427,15 @@ function inAllowedAcademyScope(channel) {
     if (!parent) return false;
     return inAllowedAcademyScope(parent);
   }
-  if (!OSCAR_ALLOWED_CATEGORY_IDS.length) return true;
-  return !!channel.parentId && OSCAR_ALLOWED_CATEGORY_IDS.includes(channel.parentId);
+  if (!TAMMY_ALLOWED_CATEGORY_IDS.length) return true;
+  return !!channel.parentId && TAMMY_ALLOWED_CATEGORY_IDS.includes(channel.parentId);
 }
 
 function isAcademyClassThread(channel) {
   if (!channel || !(channel.isThread && channel.isThread())) return false;
   const parent = channel.parent;
   if (!parent) return false;
-  if (OSCAR_CLASSES_CHANNEL_ID && parent.id === OSCAR_CLASSES_CHANNEL_ID) return true;
+  if (TAMMY_CLASSES_CHANNEL_ID && parent.id === TAMMY_CLASSES_CHANNEL_ID) return true;
   const parentName = String(parent.name || "").toLowerCase();
   return parentName.includes("academy-classes") || parentName.includes("classes");
 }
@@ -330,7 +444,7 @@ function inTicketScope(channel) {
   if (!channel || !channel.parentId || !channel.guild) return false;
 
   // If env is set, treat only that category as ticket scope
-  if (OSCAR_TICKET_CATEGORY_ID && channel.parentId === OSCAR_TICKET_CATEGORY_ID) return true;
+  if (TAMMY_TICKET_CATEGORY_ID && channel.parentId === TAMMY_TICKET_CATEGORY_ID) return true;
 
   // Otherwise, detect by category name (top-level)
   const parent = channel.guild.channels.cache.get(channel.parentId);
@@ -347,7 +461,7 @@ function requireScopeOrReply(interaction) {
     const cmd = interaction.commandName;
     const sub = interaction.options?.getSubcommand?.(false) || "";
     const dmAllowed = new Set([
-      "oscar",
+      "tammy",
       "academy",
       "student-status",
       "view-grades",
@@ -357,7 +471,7 @@ function requireScopeOrReply(interaction) {
       "academy-enrollment-status",
     ]);
 
-    if (cmd === "oscar" && ["ping", "help", "portal"].includes(sub)) return true;
+    if (cmd === "tammy" && ["ping", "help", "portal"].includes(sub)) return true;
     if (cmd === "academy" && ["student-status", "teacher-status"].includes(sub)) return true;
     if (dmAllowed.has(cmd)) return true;
 
@@ -375,7 +489,7 @@ function requireScopeOrReply(interaction) {
   if (inAllowedAcademyScope(interaction.channel)) return true;
 
   // Allow safe command anywhere
-  if (interaction.isChatInputCommand() && interaction.commandName === "oscar") {
+  if (interaction.isChatInputCommand() && interaction.commandName === "tammy") {
     const sub = interaction.options.getSubcommand(false) || "";
     if (["ping", "help", "portal"].includes(sub)) return true;
   }
@@ -387,7 +501,7 @@ function requireScopeOrReply(interaction) {
 
   interaction.reply({
     ephemeral: true,
-    content: "🦉 Oscar is scoped to Lifeline Academy channels. Use this inside the Academy category (or your ticket).",
+    content: "🦉 Tammy Brightwood is scoped to Lifeline Academy channels. Use this inside the Academy category (or your ticket).",
   }).catch(() => {});
   return false;
 }
@@ -397,7 +511,7 @@ function embedBase(title, desc) {
   return new EmbedBuilder()
     .setTitle(title)
     .setDescription(desc || "")
-    .setFooter({ text: "Oscar • Lifeline Academy" })
+    .setFooter({ text: "Tammy Brightwood • Lifeline Academy" })
     .setTimestamp(new Date());
 }
 
@@ -408,7 +522,7 @@ function scheduleToText(dayBlocks) {
 
 function getLocalParts(date = new Date()) {
   const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: OSCAR_TIMEZONE,
+    timeZone: TAMMY_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -438,7 +552,7 @@ async function fetchTextChannel(guild, channelId) {
 
 // -------------------- Academy Posts --------------------
 async function postWelcome(guild) {
-  const ch = await fetchTextChannel(guild, OSCAR_WELCOME_CHANNEL_ID);
+  const ch = await fetchTextChannel(guild, TAMMY_WELCOME_CHANNEL_ID);
   if (!ch) return false;
 
   const eb = embedBase(
@@ -456,7 +570,7 @@ async function postWelcome(guild) {
 }
 
 async function postRules(guild) {
-  const ch = await fetchTextChannel(guild, OSCAR_RULES_CHANNEL_ID);
+  const ch = await fetchTextChannel(guild, TAMMY_RULES_CHANNEL_ID);
   if (!ch) return false;
 
   const eb = embedBase(
@@ -473,7 +587,7 @@ async function postRules(guild) {
 }
 
 async function postHandbook(guild) {
-  const ch = await fetchTextChannel(guild, OSCAR_HANDBOOK_CHANNEL_ID);
+  const ch = await fetchTextChannel(guild, TAMMY_HANDBOOK_CHANNEL_ID);
   if (!ch) return false;
 
   const desc =
@@ -487,7 +601,7 @@ async function postHandbook(guild) {
 }
 
 async function postEnrollment(guild) {
-  const ch = await fetchTextChannel(guild, OSCAR_ENROLL_CHANNEL_ID);
+  const ch = await fetchTextChannel(guild, TAMMY_ENROLL_CHANNEL_ID);
   if (!ch) return false;
 
   const desc =
@@ -704,9 +818,9 @@ function buildTicketPermOverwrites(guild, applicantId) {
   });
 
   // allow staff roles (from env, fallback to teacher/admin)
-  const staffRoles = OSCAR_TICKET_STAFF_ROLE_IDS.length
-    ? OSCAR_TICKET_STAFF_ROLE_IDS
-    : [OSCAR_ADMIN_ROLE_ID, OSCAR_TEACHER_ROLE_ID].filter(Boolean);
+  const staffRoles = TAMMY_TICKET_STAFF_ROLE_IDS.length
+    ? TAMMY_TICKET_STAFF_ROLE_IDS
+    : [TAMMY_ADMIN_ROLE_ID, TAMMY_TEACHER_ROLE_ID].filter(Boolean);
 
   for (const rid of staffRoles) {
     overwrites.push({
@@ -737,8 +851,8 @@ function buildTicketPermOverwrites(guild, applicantId) {
 
 async function getOrCreateTicketCategory(guild) {
   // If a specific ticket category ID is provided, use it (must be a CATEGORY)
-  if (OSCAR_TICKET_CATEGORY_ID) {
-    const ch = await guild.channels.fetch(OSCAR_TICKET_CATEGORY_ID).catch(() => null);
+  if (TAMMY_TICKET_CATEGORY_ID) {
+    const ch = await guild.channels.fetch(TAMMY_TICKET_CATEGORY_ID).catch(() => null);
     if (ch && ch.type === ChannelType.GuildCategory) return ch;
     throw new Error("Ticket category not found or not a category channel.");
   }
@@ -762,7 +876,7 @@ async function getOrCreateTicketCategory(guild) {
   return guild.channels.create({
     name: "📂 Academy Tickets",
     type: ChannelType.GuildCategory,
-    reason: "Oscar auto-created Academy Tickets category",
+    reason: "Tammy Brightwood auto-created Academy Tickets category",
   });
 }
 
@@ -771,17 +885,17 @@ async function createPreAccessTicket(guild, applicantUser, context) {
 
   const sl = safeSlice(context?.sl_username || "unknown", 24).replace(/[^a-z0-9_-]/gi, "").toLowerCase();
   const shortId = Date.now().toString(36).slice(-5);
-  const channelName = `${OSCAR_TICKET_CHANNEL_PREFIX}-${sl}-${shortId}`.slice(0, 90);
+  const channelName = `${TAMMY_TICKET_CHANNEL_PREFIX}-${sl}-${shortId}`.slice(0, 90);
   const ticket = await guild.channels.create({
     name: channelName,
     type: ChannelType.GuildText,
     parent: category.id,
     permissionOverwrites: buildTicketPermOverwrites(guild, applicantUser.id),
-    reason: "Oscar pre-access application ticket",
+    reason: "Tammy Brightwood pre-access application ticket",
   });
 
   const closeBtn = new ButtonBuilder()
-    .setCustomId(`oscar_ticket_close:${ticket.id}`)
+    .setCustomId(`tammy_ticket_close:${ticket.id}`)
     .setLabel("Close Ticket")
     .setStyle(ButtonStyle.Danger);
 
@@ -805,6 +919,122 @@ async function createPreAccessTicket(guild, applicantUser, context) {
   return ticket;
 }
 
+function sanitizeChannelName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9-_\s]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .slice(0, 80) || "ticket";
+}
+
+async function findExistingOutreachTicket(guild, userId) {
+  const category = await getOrCreateTicketCategory(guild);
+  return (
+    guild.channels.cache.find(
+      (c) =>
+        c.parentId === category.id &&
+        c.type === ChannelType.GuildText &&
+        String(c.topic || "").includes(`tammy-outreach:${userId}`)
+    ) || null
+  );
+}
+
+async function createOutreachTicket(guild, targetUser, targetType) {
+  const category = await getOrCreateTicketCategory(guild);
+  const existing = await findExistingOutreachTicket(guild, targetUser.id);
+  if (existing) return { ticket: existing, created: false };
+
+  const member = await guild.members.fetch(targetUser.id).catch(() => null);
+  const displayName = member?.displayName || targetUser.username || targetUser.id;
+  const channelName = `${targetType}-${sanitizeChannelName(displayName)}`.slice(0, 90);
+
+  const ticket = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent: category.id,
+    topic: `tammy-outreach:${targetUser.id}`,
+    permissionOverwrites: buildTicketPermOverwrites(guild, targetUser.id),
+    reason: "Tammy Brightwood concierge support ticket",
+  });
+
+  const closeBtn = new ButtonBuilder()
+    .setCustomId(`tammy_ticket_close:${ticket.id}`)
+    .setLabel("Close Ticket")
+    .setStyle(ButtonStyle.Danger);
+
+  const row = new ActionRowBuilder().addComponents(closeBtn);
+
+  await ticket.send({
+    content: "Tammy Brightwood Concierge Ticket Opened — A staff member will assist you shortly.",
+    components: [row],
+  });
+
+  return { ticket, created: true };
+}
+
+async function sendOutreachMessage({
+  guild,
+  targetUser,
+  staffUser,
+  targetType,
+  categoryKey,
+  subject,
+  body,
+  extraNotes,
+  style,
+}) {
+  const logId = uuidv4();
+  const embed = buildOutreachEmbed({
+    categoryKey,
+    subject: safeSlice(subject, OUTREACH_MAX_SUBJECT),
+    body: safeSlice(body, OUTREACH_MAX_BODY),
+    extraNotes: safeSlice(extraNotes, OUTREACH_MAX_NOTES),
+  });
+
+  const openTicket = new ButtonBuilder()
+    .setCustomId(`tammy_outreach_ticket:${logId}`)
+    .setLabel("🎫 Open Support Ticket")
+    .setStyle(ButtonStyle.Primary);
+
+  const acknowledge = new ButtonBuilder()
+    .setCustomId(`tammy_outreach_ack:${logId}`)
+    .setLabel("👍 Acknowledge")
+    .setStyle(ButtonStyle.Success);
+
+  const row = new ActionRowBuilder().addComponents(openTicket, acknowledge);
+
+  const dmMessage = await targetUser
+    .send({ embeds: [embed], components: [row] })
+    .catch(() => null);
+
+  if (!dmMessage) return { ok: false, reason: "DM_FAILED" };
+
+  addOutreachLog({
+    id: logId,
+    type: targetType,
+    category: categoryKey,
+    userID: targetUser.id,
+    staffID: staffUser.id,
+    subject: safeSlice(subject, OUTREACH_MAX_SUBJECT),
+    message: safeSlice(body, OUTREACH_MAX_BODY),
+    extraNotes: safeSlice(extraNotes, OUTREACH_MAX_NOTES),
+    style: style || "custom",
+    acknowledged: false,
+    timestamp: nowISO(),
+    messageID: dmMessage.id,
+  });
+
+  if (guild) {
+    await tammyLog(
+      guild,
+      `🦉 Outreach DM sent by ${staffUser.tag} to ${targetUser.tag} (${targetType}/${categoryKey}).`
+    );
+  }
+
+  return { ok: true, messageId: dmMessage.id, logId };
+}
+
 async function safeDM(user, message) {
   try {
     await user.send(message);
@@ -823,13 +1053,13 @@ function parseCSV(filePath) {
     const content = fs.readFileSync(filePath, 'utf8');
     const lines = content.split('\n');
     if (lines.length < 2) return [];
-    
+
     // Simple CSV parser (handles quotes)
     function parseLine(line) {
       const result = [];
       let current = '';
       let inQuotes = false;
-      
+
       for (let i = 0; i < line.length; i++) {
         const char = line[i];
         if (char === '"') {
@@ -844,10 +1074,10 @@ function parseCSV(filePath) {
       result.push(current.trim());
       return result;
     }
-    
+
     const headers = parseLine(lines[0]);
     const rows = [];
-    
+
     for (let i = 1; i < lines.length; i++) {
       if (lines[i].trim()) {
         const values = parseLine(lines[i]);
@@ -858,7 +1088,7 @@ function parseCSV(filePath) {
         rows.push(row);
       }
     }
-    
+
     return rows;
   } catch (e) {
     console.error('CSV Parse Error:', e);
@@ -870,18 +1100,18 @@ function parseCSV(filePath) {
 function detectTeacherRoles(positionsApplyingFor) {
   const positions = String(positionsApplyingFor || '').toLowerCase();
   const roles = [];
-  
+
   if (positions.includes('culinary')) roles.push('culinary');
   if (positions.includes('elementary')) roles.push('elementary');
   if (positions.includes('high school')) roles.push('secondary');
   if (positions.includes('school counselor')) roles.push('counselor');
   if (positions.includes('office') || positions.includes('administrative')) roles.push('admin_support');
   if (positions.includes('daycare')) roles.push('daycare');
-  
+
   // If multiple roles, use combined template
   if (roles.length > 1) return ['combined_teacher_workshop'];
   if (roles.length === 1) return roles;
-  
+
   return ['teacher_general']; // fallback
 }
 
@@ -890,7 +1120,7 @@ function buildTeacherFollowUpModal(userId, roles) {
   const modal = new ModalBuilder()
     .setCustomId(`teacher_followup:${userId}`)
     .setTitle('🎓 Lifeline Academy – Placement Follow-Up');
-  
+
   const primaryRole = new TextInputBuilder()
     .setCustomId('primary_role')
     .setLabel('Primary Role This Term')
@@ -898,7 +1128,7 @@ function buildTeacherFollowUpModal(userId, roles) {
     .setPlaceholder('e.g., Elementary Teacher, Culinary Instructor')
     .setRequired(true)
     .setMaxLength(100);
-  
+
   const workshops = new TextInputBuilder()
     .setCustomId('workshops')
     .setLabel('Workshops You\'d Like to Teach or Assist')
@@ -906,7 +1136,7 @@ function buildTeacherFollowUpModal(userId, roles) {
     .setPlaceholder('List any workshops, electives, or clubs...')
     .setRequired(false)
     .setMaxLength(500);
-  
+
   const skills = new TextInputBuilder()
     .setCustomId('skills')
     .setLabel('SL / Creative / Tech Skills')
@@ -914,7 +1144,7 @@ function buildTeacherFollowUpModal(userId, roles) {
     .setPlaceholder('Photography, building, scripting, etc.')
     .setRequired(false)
     .setMaxLength(500);
-  
+
   const availability = new TextInputBuilder()
     .setCustomId('availability')
     .setLabel('Weekly Availability')
@@ -922,7 +1152,7 @@ function buildTeacherFollowUpModal(userId, roles) {
     .setPlaceholder('Days and times you\'re available...')
     .setRequired(true)
     .setMaxLength(300);
-  
+
   const leepGoal = new TextInputBuilder()
     .setCustomId('leep_goal')
     .setLabel('LEEP Growth Goal')
@@ -930,7 +1160,7 @@ function buildTeacherFollowUpModal(userId, roles) {
     .setPlaceholder('What skill would you like to develop?')
     .setRequired(false)
     .setMaxLength(300);
-  
+
   modal.addComponents(
     new ActionRowBuilder().addComponents(primaryRole),
     new ActionRowBuilder().addComponents(workshops),
@@ -938,7 +1168,7 @@ function buildTeacherFollowUpModal(userId, roles) {
     new ActionRowBuilder().addComponents(availability),
     new ActionRowBuilder().addComponents(leepGoal)
   );
-  
+
   return modal;
 }
 
@@ -947,21 +1177,21 @@ function buildStudentSignatureModal(userId) {
   const modal = new ModalBuilder()
     .setCustomId(`student_signature:${userId}`)
     .setTitle('🖊️ Enrollment Completion');
-  
+
   const studentName = new TextInputBuilder()
     .setCustomId('student_name')
     .setLabel('Student Full Name')
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
     .setMaxLength(100);
-  
+
   const parentName = new TextInputBuilder()
     .setCustomId('parent_name')
     .setLabel('Parent / Guardian Full Name')
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
     .setMaxLength(100);
-  
+
   const signature = new TextInputBuilder()
     .setCustomId('signature')
     .setLabel('Digital Signature (Type Full Name)')
@@ -969,7 +1199,7 @@ function buildStudentSignatureModal(userId) {
     .setPlaceholder('Type your full name here')
     .setRequired(true)
     .setMaxLength(100);
-  
+
   const agreement = new TextInputBuilder()
     .setCustomId('agreement')
     .setLabel('Confirm Agreement to Academy Policies')
@@ -977,14 +1207,14 @@ function buildStudentSignatureModal(userId) {
     .setPlaceholder('Type: Yes')
     .setRequired(true)
     .setMaxLength(10);
-  
+
   modal.addComponents(
     new ActionRowBuilder().addComponents(studentName),
     new ActionRowBuilder().addComponents(parentName),
     new ActionRowBuilder().addComponents(signature),
     new ActionRowBuilder().addComponents(agreement)
   );
-  
+
   return modal;
 }
 
@@ -992,14 +1222,14 @@ function buildStudentConfirmModal(userId) {
   const modal = new ModalBuilder()
     .setCustomId(`student_confirm:${userId}`)
     .setTitle('🎒 Information Verification');
-  
+
   const studentName = new TextInputBuilder()
     .setCustomId('student_name')
     .setLabel('Student Full Name')
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
     .setMaxLength(100);
-  
+
   const studentAge = new TextInputBuilder()
     .setCustomId('student_age')
     .setLabel('Student Age')
@@ -1007,14 +1237,14 @@ function buildStudentConfirmModal(userId) {
     .setPlaceholder('e.g., 5, 10, 15')
     .setRequired(true)
     .setMaxLength(10);
-  
+
   const parentName = new TextInputBuilder()
     .setCustomId('parent_name')
     .setLabel('Parent / Guardian Full Name')
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
     .setMaxLength(100);
-  
+
   const confirmAccurate = new TextInputBuilder()
     .setCustomId('confirm_accurate')
     .setLabel('Confirm Information Is Accurate')
@@ -1022,7 +1252,7 @@ function buildStudentConfirmModal(userId) {
     .setPlaceholder('Type: Yes')
     .setRequired(true)
     .setMaxLength(10);
-  
+
   const notes = new TextInputBuilder()
     .setCustomId('notes')
     .setLabel('Notes (Optional)')
@@ -1030,7 +1260,7 @@ function buildStudentConfirmModal(userId) {
     .setPlaceholder('Any additional information...')
     .setRequired(false)
     .setMaxLength(500);
-  
+
   modal.addComponents(
     new ActionRowBuilder().addComponents(studentName),
     new ActionRowBuilder().addComponents(studentAge),
@@ -1038,15 +1268,15 @@ function buildStudentConfirmModal(userId) {
     new ActionRowBuilder().addComponents(confirmAccurate),
     new ActionRowBuilder().addComponents(notes)
   );
-  
+
   return modal;
 }
 
 // Academy Operations Logger
 async function logToAcademyOps(guild, embed) {
   try {
-    if (!OSCAR_OPERATIONS_CHANNEL_ID) return;
-    const ch = await guild.channels.fetch(OSCAR_OPERATIONS_CHANNEL_ID).catch(() => null);
+    if (!TAMMY_OPERATIONS_CHANNEL_ID) return;
+    const ch = await guild.channels.fetch(TAMMY_OPERATIONS_CHANNEL_ID).catch(() => null);
     if (!ch || ch.type !== ChannelType.GuildText) return;
     await ch.send({ embeds: [embed] });
   } catch (e) {
@@ -1056,13 +1286,13 @@ async function logToAcademyOps(guild, embed) {
 
 // -------------------- COMMANDS --------------------
 const commandDefs = [
-  // OSCAR CORE
+  // TAMMY CORE
   new SlashCommandBuilder()
-    .setName("oscar")
-    .setDescription("Oscar • Lifeline Academy utilities")
+    .setName("tammy")
+    .setDescription("Tammy Brightwood • Lifeline Academy utilities")
     .addSubcommand((s) => s.setName("ping").setDescription("Health check"))
     .addSubcommand((s) => s.setName("help").setDescription("Show command help"))
-    .addSubcommand((s) => s.setName("config").setDescription("Show Oscar config (staff only)"))
+    .addSubcommand((s) => s.setName("config").setDescription("Show Tammy Brightwood config (staff only)"))
     .addSubcommand((s) =>
       s
         .setName("announce")
@@ -1267,6 +1497,46 @@ const commandDefs = [
         )
     ),
 
+  // TAMMY OUTREACH
+  new SlashCommandBuilder()
+    .setName("tammy-message")
+    .setDescription("Send an Tammy Brightwood outreach DM (staff only)")
+    .addStringOption((o) =>
+      o
+        .setName("target_type")
+        .setDescription("Who are you messaging?")
+        .setRequired(true)
+        .addChoices(
+          { name: "Teacher", value: "teacher" },
+          { name: "Student", value: "student" },
+          { name: "Parent", value: "parent" }
+        )
+    )
+    .addUserOption((o) => o.setName("user").setDescription("User to message").setRequired(true))
+    .addStringOption((o) =>
+      o
+        .setName("category")
+        .setDescription("Message category")
+        .setRequired(true)
+        .addChoices(
+          { name: "Enrollment", value: "enrollment" },
+          { name: "Missing Info", value: "missing_info" },
+          { name: "Accepted", value: "accepted" },
+          { name: "Rejected", value: "rejected" },
+          { name: "Reminder", value: "reminder" }
+        )
+    )
+    .addStringOption((o) =>
+      o
+        .setName("style")
+        .setDescription("Use a preset template or write a custom message")
+        .setRequired(true)
+        .addChoices(
+          { name: "Preset", value: "preset" },
+          { name: "Custom", value: "custom" }
+        )
+    ),
+
   // CLASSROOM TOOLS
   new SlashCommandBuilder()
     .setName("class")
@@ -1417,12 +1687,12 @@ const commandDefs = [
 // -------------------- COMMAND REGISTRATION --------------------
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-  
-  // Get Oscar classroom commands from the initialized instance
+
+  // Get Tammy Brightwood classroom commands from the initialized instance
   let allCommands = [...commandDefs];
-  
+
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: allCommands });
-  console.log(`✅ Oscar commands registered (guild scope). Total commands: ${allCommands.length}`);
+  console.log(`✅ Tammy Brightwood commands registered (guild scope). Total commands: ${allCommands.length}`);
 }
 
 // -------------------- DAILY SCHEDULERS --------------------
@@ -1430,7 +1700,7 @@ let lastDailyBulletinKey = null;
 let lastDailyPromptKey = null;
 
 async function postAutoBulletin(guild) {
-  const ch = await fetchTextChannel(guild, OSCAR_CALENDAR_CHANNEL_ID);
+  const ch = await fetchTextChannel(guild, TAMMY_CALENDAR_CHANNEL_ID);
   if (!ch) return;
 
   const parts = getLocalParts();
@@ -1443,11 +1713,11 @@ async function postAutoBulletin(guild) {
   );
 
   await ch.send({ embeds: [eb] });
-  await oscarLog(guild, `📰 Auto bulletin posted for ${day}.`);
+  await tammyLog(guild, `📰 Auto bulletin posted for ${day}.`);
 }
 
 async function postAutoPrompt(guild) {
-  const ch = await fetchTextChannel(guild, OSCAR_STUDENT_LOUNGE_CHANNEL_ID);
+  const ch = await fetchTextChannel(guild, TAMMY_STUDENT_LOUNGE_CHANNEL_ID);
   if (!ch) return;
 
   const prompt = randomFrom(promptStore.prompts) || "Create a respectful RP scene that fits school life.";
@@ -1456,7 +1726,7 @@ async function postAutoPrompt(guild) {
   await ch.send({ embeds: [eb] });
   promptStore.lastPostedAt = nowISO();
   saveJson(FILE_PROMPTS, promptStore);
-  await oscarLog(guild, "🦉 Auto daily prompt posted.");
+  await tammyLog(guild, "🦉 Auto daily prompt posted.");
 }
 
 async function runDailySchedulers() {
@@ -1466,7 +1736,7 @@ async function runDailySchedulers() {
 
   const { hour, minute, ymd } = getLocalParts();
 
-  if (hour === OSCAR_DAILY_BULLETIN_HOUR && minute === 0) {
+  if (hour === TAMMY_DAILY_BULLETIN_HOUR && minute === 0) {
     const key = `${ymd}:bulletin`;
     if (key !== lastDailyBulletinKey) {
       lastDailyBulletinKey = key;
@@ -1474,7 +1744,7 @@ async function runDailySchedulers() {
     }
   }
 
-  if (hour === OSCAR_DAILY_PROMPT_HOUR && minute === 0) {
+  if (hour === TAMMY_DAILY_PROMPT_HOUR && minute === 0) {
     const key = `${ymd}:prompt`;
     if (key !== lastDailyPromptKey) {
       lastDailyPromptKey = key;
@@ -1486,12 +1756,12 @@ async function runDailySchedulers() {
 // -------------------- Interaction handlers --------------------
 function buildStatusButtons(type, sl_username) {
   const openTicket = new ButtonBuilder()
-    .setCustomId(`oscar_open_ticket:${type}:${encodeURIComponent(sl_username)}`)
+    .setCustomId(`tammy_open_ticket:${type}:${encodeURIComponent(sl_username)}`)
     .setLabel("Open Question Ticket")
     .setStyle(ButtonStyle.Primary);
 
   const refresh = new ButtonBuilder()
-    .setCustomId(`oscar_refresh_status:${type}:${encodeURIComponent(sl_username)}`)
+    .setCustomId(`tammy_refresh_status:${type}:${encodeURIComponent(sl_username)}`)
     .setLabel("Refresh Status")
     .setStyle(ButtonStyle.Secondary);
 
@@ -1582,12 +1852,67 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     // Buttons
     if (interaction.isButton()) {
-      if (!requireScopeOrReply(interaction)) return;
-
       const [kind, a, b, c] = interaction.customId.split(":");
       const guild = interaction.guild;
 
-      if (kind === "oscar_ticket_close") {
+      if (kind === "tammy_outreach_ack") {
+        const logId = a;
+        const record = findOutreachLogById(logId);
+
+        if (!record || record.userID !== interaction.user.id) {
+          return interaction.reply({ content: "❌ This acknowledgement is not for you." });
+        }
+
+        if (record.acknowledged) {
+          return interaction.reply({ content: "✅ Already confirmed. Thanks!" });
+        }
+
+        record.acknowledged = true;
+        record.acknowledged_at = nowISO();
+        saveOutreachStore();
+
+        await interaction.reply({ content: "Thanks for confirming! 🦉" });
+        return;
+      }
+
+      if (kind === "tammy_outreach_ticket") {
+        const logId = a;
+        const record = findOutreachLogById(logId);
+
+        if (!record || record.userID !== interaction.user.id) {
+          return interaction.reply({ content: "❌ This ticket request is not for you." });
+        }
+
+        const targetGuild =
+          interaction.guild || (await client.guilds.fetch(GUILD_ID).catch(() => null));
+        if (!targetGuild) {
+          return interaction.reply({ content: "❌ I could not find the academy server." });
+        }
+
+        const targetUser = await client.users.fetch(record.userID).catch(() => null);
+        if (!targetUser) {
+          return interaction.reply({ content: "❌ I could not find your user account." });
+        }
+
+        const result = await createOutreachTicket(
+          targetGuild,
+          targetUser,
+          record.type || "student"
+        );
+
+        await tammyLog(
+          targetGuild,
+          `🎫 Outreach ticket ${result.created ? "created" : "found"} for ${targetUser.tag} -> #${result.ticket.name}`
+        );
+
+        return interaction.reply({
+          content: `✅ Support ticket ${result.created ? "created" : "already open"}: <#${result.ticket.id}>`,
+        });
+      }
+
+      if (!requireScopeOrReply(interaction)) return;
+
+      if (kind === "tammy_ticket_close") {
         const ticketId = a;
         if (!interaction.inGuild() || !guild) return interaction.reply({ ephemeral: true, content: "Ticket close can only be used in-server." });
 
@@ -1598,12 +1923,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const ch = await guild.channels.fetch(ticketId).catch(() => null);
         if (ch) {
           await ch.send({ content: "✅ Ticket closed by staff. Thank you!" }).catch(() => {});
-          await ch.delete("Oscar ticket closed").catch(() => {});
+          await ch.delete("Tammy Brightwood ticket closed").catch(() => {});
         }
         return;
       }
 
-      if (kind === "oscar_open_ticket") {
+      if (kind === "tammy_open_ticket") {
         const type = a;
         const sl = decodeURIComponent(b || "");
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
@@ -1626,14 +1951,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } catch {}
 
         const ticket = await createPreAccessTicket(guild, interaction.user, context);
-        await oscarLog(guild, `🎫 Ticket created for ${interaction.user.tag} (${type}:${sl}) -> #${ticket.name}`);
+        await tammyLog(guild, `🎫 Ticket created for ${interaction.user.tag} (${type}:${sl}) -> #${ticket.name}`);
 
         return interaction.editReply({
           content: `✅ Ticket created: <#${ticket.id}>\nStaff will reply there. You can keep this channel open until your question is handled.`,
         }).catch(() => {});
       }
 
-      if (kind === "oscar_refresh_status") {
+      if (kind === "tammy_refresh_status") {
         const type = a;
         const sl = decodeURIComponent(b || "");
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
@@ -1643,14 +1968,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (kind === "open_teacher_followup") {
         const targetUserId = a;
         const staffUserId = b;
-        
+
         if (interaction.user.id !== targetUserId) {
           return interaction.reply({ ephemeral: true, content: "❌ This follow-up is not for you." });
         }
-        
+
         const roles = ['general']; // Default, we can enhance this
         const modal = buildTeacherFollowUpModal(targetUserId, roles);
-        
+
         await interaction.showModal(modal);
         return;
       }
@@ -1659,18 +1984,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const type = a;
         const targetUserId = b;
         const staffUserId = c;
-        
+
         if (interaction.user.id !== targetUserId) {
           return interaction.reply({ ephemeral: true, content: "❌ This follow-up is not for you." });
         }
-        
+
         let modal;
         if (type === "signature") {
           modal = buildStudentSignatureModal(targetUserId);
         } else {
           modal = buildStudentConfirmModal(targetUserId);
         }
-        
+
         await interaction.showModal(modal);
         return;
       }
@@ -1682,6 +2007,67 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isModalSubmit()) {
       const [kind, userId] = interaction.customId.split(":");
       const guild = interaction.guild || await client.guilds.fetch(GUILD_ID).catch(() => null);
+
+      if (kind === "tammy_outreach_custom") {
+        if (interaction.user.id !== userId) {
+          return interaction.reply({ ephemeral: true, content: "❌ This message is not for you." });
+        }
+
+        const pending = pendingOutreachByStaff.get(userId);
+        if (!pending) {
+          return interaction.reply({ ephemeral: true, content: "❌ Outreach request expired. Please run the command again." });
+        }
+
+        const lastSentAt = outreachCooldownByStaff.get(userId) || 0;
+        const now = Date.now();
+        if (now - lastSentAt < OUTREACH_COOLDOWN_MS) {
+          const waitSec = Math.ceil((OUTREACH_COOLDOWN_MS - (now - lastSentAt)) / 1000);
+          return interaction.reply({
+            ephemeral: true,
+            content: `⏳ Please wait ${waitSec}s before sending another Tammy Brightwood message.`,
+          });
+        }
+
+        const subject = safeSlice(interaction.fields.getTextInputValue("subject"), OUTREACH_MAX_SUBJECT);
+        const body = safeSlice(interaction.fields.getTextInputValue("body"), OUTREACH_MAX_BODY);
+        const notes = safeSlice(interaction.fields.getTextInputValue("notes"), OUTREACH_MAX_NOTES);
+
+        const targetUser = await client.users.fetch(pending.targetUserId).catch(() => null);
+        if (!targetUser) {
+          pendingOutreachByStaff.delete(userId);
+          return interaction.reply({ ephemeral: true, content: "❌ User not found." });
+        }
+
+        const result = await sendOutreachMessage({
+          guild,
+          targetUser,
+          staffUser: interaction.user,
+          targetType: pending.targetType,
+          categoryKey: pending.categoryKey,
+          subject,
+          body,
+          extraNotes: notes,
+          style: "custom",
+        });
+
+        pendingOutreachByStaff.delete(userId);
+
+        if (!result.ok) {
+          if (guild) {
+            await tammyLog(guild, `⚠️ Outreach DM failed to ${targetUser.tag} (DMs closed).`);
+          }
+          return interaction.reply({
+            ephemeral: true,
+            content: "❌ I could not DM the user. They may have DMs disabled.",
+          });
+        }
+
+        outreachCooldownByStaff.set(userId, Date.now());
+        return interaction.reply({
+          ephemeral: true,
+          content: `✅ Tammy Brightwood message sent to ${targetUser.tag}.`,
+        });
+      }
 
       if (kind === "teacher_followup") {
         const primaryRole = interaction.fields.getTextInputValue('primary_role');
@@ -1709,7 +2095,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setTimestamp();
 
         await logToAcademyOps(guild, embed);
-        await oscarLog(guild, `📋 Teacher follow-up submitted by ${interaction.user.tag}`);
+        await tammyLog(guild, `📋 Teacher follow-up submitted by ${interaction.user.tag}`);
         return;
       }
 
@@ -1737,7 +2123,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setTimestamp();
 
         await logToAcademyOps(guild, embed);
-        await oscarLog(guild, `🖊️ Student signature submitted by ${interaction.user.tag} for ${studentName}`);
+        await tammyLog(guild, `🖊️ Student signature submitted by ${interaction.user.tag} for ${studentName}`);
         return;
       }
 
@@ -1768,7 +2154,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setTimestamp();
 
         await logToAcademyOps(guild, embed);
-        await oscarLog(guild, `✅ Student info confirmed by ${interaction.user.tag} for ${studentName}`);
+        await tammyLog(guild, `✅ Student info confirmed by ${interaction.user.tag} for ${studentName}`);
         return;
       }
 
@@ -1780,15 +2166,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!requireScopeOrReply(interaction)) return;
 
     // Defer all slash commands to prevent timeout
-    if (!interaction.deferred && !interaction.replied) {
+    const isCustomOutreach =
+      interaction.commandName === "tammy-message" &&
+      interaction.options.getString("style", false) === "custom";
+
+    if (!isCustomOutreach && !interaction.deferred && !interaction.replied) {
       await interaction.deferReply({ ephemeral: true });
     }
 
     const member = interaction.member;
     const guild = interaction.guild;
 
-    // ==================== OSCAR CLASSROOM COMMANDS ====================
-    // Route all academy-* and classroom-related commands to Oscar Bot
+    // ==================== TAMMY CLASSROOM COMMANDS ====================
+    // Route all academy-* and classroom-related commands to Tammy Brightwood Bot
     // TODO: Announcements targeting (class/grade/role/thread) is stubbed in manager logic.
     // TODO: Grade missing reminders (Master Grade Ledger) are not wired yet.
     // TODO: Teacher thread actions need Workbook HUD progress hook (not wired).
@@ -1834,23 +2224,82 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       return interaction.reply({
         ephemeral: true,
-        content: "❌ Oscar classroom system not yet initialized. Try again in a moment.",
+        content: "❌ Tammy Brightwood classroom system not yet initialized. Try again in a moment.",
       });
     }
 
-    // /oscar
-    if (interaction.commandName === "oscar") {
+    if (interaction.commandName === "tammy-message") {
+      if (!isTeacher(member)) return replyEphemeral(interaction, { content: "❌ Staff only." });
+
+      const targetType = interaction.options.getString("target_type", true);
+      const targetUser = interaction.options.getUser("user", true);
+      const categoryKey = interaction.options.getString("category", true);
+      const style = interaction.options.getString("style", true);
+
+      const lastSentAt = outreachCooldownByStaff.get(interaction.user.id) || 0;
+      const now = Date.now();
+      if (now - lastSentAt < OUTREACH_COOLDOWN_MS) {
+        const waitSec = Math.ceil((OUTREACH_COOLDOWN_MS - (now - lastSentAt)) / 1000);
+        return replyEphemeral(interaction, {
+          content: `⏳ Please wait ${waitSec}s before sending another Tammy Brightwood message.`,
+        });
+      }
+
+      if (style === "custom") {
+        pendingOutreachByStaff.set(interaction.user.id, {
+          targetType,
+          targetUserId: targetUser.id,
+          categoryKey,
+        });
+
+        const modal = buildOutreachModal(interaction.user.id);
+        await interaction.showModal(modal);
+        return;
+      }
+
+      const preset = OUTREACH_PRESETS[categoryKey];
+      if (!preset) {
+        return replyEphemeral(interaction, { content: "❌ Preset template not found for this category." });
+      }
+
+      const result = await sendOutreachMessage({
+        guild,
+        targetUser,
+        staffUser: interaction.user,
+        targetType,
+        categoryKey,
+        subject: preset.subject,
+        body: preset.body,
+        extraNotes: "",
+        style: "preset",
+      });
+
+      if (!result.ok) {
+        if (guild) {
+          await tammyLog(guild, `⚠️ Outreach DM failed to ${targetUser.tag} (DMs closed).`);
+        }
+        return replyEphemeral(interaction, {
+          content: "❌ I could not DM the user. They may have DMs disabled.",
+        });
+      }
+
+      outreachCooldownByStaff.set(interaction.user.id, Date.now());
+      return replyEphemeral(interaction, { content: `✅ Tammy Brightwood message sent to ${targetUser.tag}.` });
+    }
+
+    // /tammy
+    if (interaction.commandName === "tammy") {
       const sub = interaction.options.getSubcommand(false);
       const group = interaction.options.getSubcommandGroup(false);
 
       if (sub === "ping") {
-        return interaction.editReply({ content: "✅ Oscar is awake. (Academy systems online)" });
+        return interaction.editReply({ content: "✅ Tammy Brightwood is awake. (Academy systems online)" });
       }
 
       if (sub === "help") {
         const eb = embedBase(
-          "Oscar Help",
-          "Oscar runs **Lifeline Academy** routines, schedules, prompts, classroom tools, and live application status.\n\n" +
+          "Tammy Brightwood Help",
+          "Tammy Brightwood runs **Lifeline Academy** routines, schedules, prompts, classroom tools, and live application status.\n\n" +
             "Applicants:\n" +
             "• `/academy student-status`\n" +
             "• `/academy teacher-status`\n\n" +
@@ -1859,7 +2308,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             "• `/student pass_request`\n\n" +
             "Teachers/Staff:\n" +
             "• `/class attendance_start`\n" +
-            "• `/oscar announce`\n" +
+            "• `/tammy announce`\n" +
             "• `/academy approve-student` / `confirm-tuition` / `approve-teacher`\n"
         );
         return interaction.editReply({ embeds: [eb] });
@@ -1868,21 +2317,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (sub === "config") {
         if (!isTeacher(member)) return interaction.editReply({ content: "❌ Staff only." });
 
-        const eb = embedBase("Oscar Config", "Current environment mapping (IDs):").addFields(
-          { name: "Allowed Category IDs", value: OSCAR_ALLOWED_CATEGORY_IDS.length ? OSCAR_ALLOWED_CATEGORY_IDS.join(", ") : "Not set (all channels allowed)" },
-          { name: "Log Channel", value: OSCAR_LOG_CHANNEL_ID ? `<#${OSCAR_LOG_CHANNEL_ID}>` : "Not set" },
-          { name: "Ticket Category", value: OSCAR_TICKET_CATEGORY_ID ? `<#${OSCAR_TICKET_CATEGORY_ID}>` : "Not set" },
-          { name: "Welcome", value: OSCAR_WELCOME_CHANNEL_ID ? `<#${OSCAR_WELCOME_CHANNEL_ID}>` : "Not set" },
-          { name: "Rules", value: OSCAR_RULES_CHANNEL_ID ? `<#${OSCAR_RULES_CHANNEL_ID}>` : "Not set" },
-          { name: "Announcements", value: OSCAR_ANNOUNCE_CHANNEL_ID ? `<#${OSCAR_ANNOUNCE_CHANNEL_ID}>` : "Not set" },
-          { name: "Calendar", value: OSCAR_CALENDAR_CHANNEL_ID ? `<#${OSCAR_CALENDAR_CHANNEL_ID}>` : "Not set" },
-          { name: "Handbook", value: OSCAR_HANDBOOK_CHANNEL_ID ? `<#${OSCAR_HANDBOOK_CHANNEL_ID}>` : "Not set" },
-          { name: "Enrollment", value: OSCAR_ENROLL_CHANNEL_ID ? `<#${OSCAR_ENROLL_CHANNEL_ID}>` : "Not set" },
-          { name: "Student Lounge", value: OSCAR_STUDENT_LOUNGE_CHANNEL_ID ? `<#${OSCAR_STUDENT_LOUNGE_CHANNEL_ID}>` : "Not set" },
-          { name: "Pictures", value: OSCAR_PICTURES_CHANNEL_ID ? `<#${OSCAR_PICTURES_CHANNEL_ID}>` : "Not set" },
-          { name: "Teacher Role", value: OSCAR_TEACHER_ROLE_ID || "Not set" },
-          { name: "Admin Role", value: OSCAR_ADMIN_ROLE_ID || "Not set" },
-          { name: "Nurse Role", value: OSCAR_NURSE_ROLE_ID || "Not set" },
+        const eb = embedBase("Tammy Brightwood Config", "Current environment mapping (IDs):").addFields(
+          { name: "Allowed Category IDs", value: TAMMY_ALLOWED_CATEGORY_IDS.length ? TAMMY_ALLOWED_CATEGORY_IDS.join(", ") : "Not set (all channels allowed)" },
+          { name: "Log Channel", value: TAMMY_LOG_CHANNEL_ID ? `<#${TAMMY_LOG_CHANNEL_ID}>` : "Not set" },
+          { name: "Ticket Category", value: TAMMY_TICKET_CATEGORY_ID ? `<#${TAMMY_TICKET_CATEGORY_ID}>` : "Not set" },
+          { name: "Welcome", value: TAMMY_WELCOME_CHANNEL_ID ? `<#${TAMMY_WELCOME_CHANNEL_ID}>` : "Not set" },
+          { name: "Rules", value: TAMMY_RULES_CHANNEL_ID ? `<#${TAMMY_RULES_CHANNEL_ID}>` : "Not set" },
+          { name: "Announcements", value: TAMMY_ANNOUNCE_CHANNEL_ID ? `<#${TAMMY_ANNOUNCE_CHANNEL_ID}>` : "Not set" },
+          { name: "Calendar", value: TAMMY_CALENDAR_CHANNEL_ID ? `<#${TAMMY_CALENDAR_CHANNEL_ID}>` : "Not set" },
+          { name: "Handbook", value: TAMMY_HANDBOOK_CHANNEL_ID ? `<#${TAMMY_HANDBOOK_CHANNEL_ID}>` : "Not set" },
+          { name: "Enrollment", value: TAMMY_ENROLL_CHANNEL_ID ? `<#${TAMMY_ENROLL_CHANNEL_ID}>` : "Not set" },
+          { name: "Student Lounge", value: TAMMY_STUDENT_LOUNGE_CHANNEL_ID ? `<#${TAMMY_STUDENT_LOUNGE_CHANNEL_ID}>` : "Not set" },
+          { name: "Pictures", value: TAMMY_PICTURES_CHANNEL_ID ? `<#${TAMMY_PICTURES_CHANNEL_ID}>` : "Not set" },
+          { name: "Teacher Role", value: TAMMY_TEACHER_ROLE_ID || "Not set" },
+          { name: "Admin Role", value: TAMMY_ADMIN_ROLE_ID || "Not set" },
+          { name: "Nurse Role", value: TAMMY_NURSE_ROLE_ID || "Not set" },
           { name: "Student Sheet", value: STUDENT_SHEET_ID || "Not set" },
           { name: "Teacher Sheet", value: TEACHER_SHEET_ID || "Not set" }
         );
@@ -1902,13 +2351,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const embed = embedBase(title, msg);
 
         if (targetType === "global" || !targetType) {
-          const ch = await fetchTextChannel(guild, OSCAR_ANNOUNCE_CHANNEL_ID);
+          const ch = await fetchTextChannel(guild, TAMMY_ANNOUNCE_CHANNEL_ID);
           if (!ch) {
             return interaction.editReply({ content: "❌ Announcement channel not available." });
           }
 
           await ch.send({ content: pingEveryone ? "@everyone" : undefined, embeds: [embed] });
-          await oscarLog(guild, `📣 Announcement (global) by ${interaction.user.tag}: ${title}`);
+          await tammyLog(guild, `📣 Announcement (global) by ${interaction.user.tag}: ${title}`);
           return interaction.editReply({ content: "✅ Announcement posted." });
         }
 
@@ -1936,7 +2385,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
 
           await targetChannel.send({ embeds: [embed] });
-          await oscarLog(guild, `📣 Announcement (${targetType}) by ${interaction.user.tag}: ${title} -> ${targetChannel.id}`);
+          await tammyLog(guild, `📣 Announcement (${targetType}) by ${interaction.user.tag}: ${title} -> ${targetChannel.id}`);
           return interaction.editReply({ content: "✅ Announcement posted." });
         }
 
@@ -1945,7 +2394,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             return interaction.editReply({ content: "❌ Please provide a role ID." });
           }
 
-          const ch = await fetchTextChannel(guild, OSCAR_ANNOUNCE_CHANNEL_ID);
+          const ch = await fetchTextChannel(guild, TAMMY_ANNOUNCE_CHANNEL_ID);
           if (!ch) {
             return interaction.editReply({ content: "❌ Announcement channel not available." });
           }
@@ -1956,7 +2405,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ];
 
           await ch.send({ content: mentions.join(" "), embeds: [embed] });
-          await oscarLog(guild, `📣 Announcement (${targetType}) by ${interaction.user.tag}: ${title} -> role ${targetId}`);
+          await tammyLog(guild, `📣 Announcement (${targetType}) by ${interaction.user.tag}: ${title} -> role ${targetId}`);
           return interaction.editReply({ content: "✅ Announcement posted." });
         }
 
@@ -1967,13 +2416,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!isTeacher(member)) return interaction.editReply({ content: "❌ Teachers/staff only." });
 
         const msg = safeSlice(interaction.options.getString("message", true), 3500);
-        const ch = (await fetchTextChannel(guild, OSCAR_CALENDAR_CHANNEL_ID)) || interaction.channel;
+        const ch = (await fetchTextChannel(guild, TAMMY_CALENDAR_CHANNEL_ID)) || interaction.channel;
         if (!ch || ch.type !== ChannelType.GuildText) {
           return interaction.editReply({ content: "❌ Calendar channel not available." });
         }
 
         await ch.send({ embeds: [embedBase("Daily Bulletin", msg)] });
-        await oscarLog(guild, `📰 Bulletin posted by ${interaction.user.tag}`);
+        await tammyLog(guild, `📰 Bulletin posted by ${interaction.user.tag}`);
         return interaction.editReply({ content: "✅ Bulletin posted." });
       }
 
@@ -2040,7 +2489,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           scheduleStore.lastUpdatedAt = nowISO();
           saveJson(FILE_SCHEDULE, scheduleStore);
 
-          await oscarLog(guild, `📅 Schedule updated by ${interaction.user.tag} (${day}): ${label}`);
+          await tammyLog(guild, `📅 Schedule updated by ${interaction.user.tag} (${day}): ${label}`);
           return interaction.editReply({ content: `✅ Added schedule block for **${day}**.` });
         }
 
@@ -2052,7 +2501,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           scheduleStore.lastUpdatedAt = nowISO();
           saveJson(FILE_SCHEDULE, scheduleStore);
 
-          await oscarLog(guild, `🧹 Schedule cleared for ${day} by ${interaction.user.tag}`);
+          await tammyLog(guild, `🧹 Schedule cleared for ${day} by ${interaction.user.tag}`);
           return interaction.editReply({ content: `✅ Cleared schedule for **${day}**.` });
         }
       }
@@ -2065,7 +2514,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (post) {
           if (!isTeacher(member)) return interaction.editReply({ content: "❌ Staff only." });
 
-          const ch = (await fetchTextChannel(guild, OSCAR_STUDENT_LOUNGE_CHANNEL_ID)) || interaction.channel;
+          const ch = (await fetchTextChannel(guild, TAMMY_STUDENT_LOUNGE_CHANNEL_ID)) || interaction.channel;
           if (!ch || ch.type !== ChannelType.GuildText) {
             return interaction.editReply({ content: "❌ Student lounge channel not available." });
           }
@@ -2074,7 +2523,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           promptStore.lastPostedAt = nowISO();
           saveJson(FILE_PROMPTS, promptStore);
 
-          await oscarLog(guild, `🦉 Prompt posted by ${interaction.user.tag}`);
+          await tammyLog(guild, `🦉 Prompt posted by ${interaction.user.tag}`);
           return interaction.editReply({ content: "✅ Prompt posted." });
         }
 
@@ -2130,7 +2579,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           staff_notes: `Linked to Discord: ${user.tag} (${user.id}) by ${interaction.user.tag}`,
         });
 
-        await oscarLog(guild, `🔗 Linked ${type} ${sl} -> ${user.tag} by ${interaction.user.tag}`);
+        await tammyLog(guild, `🔗 Linked ${type} ${sl} -> ${user.tag} by ${interaction.user.tag}`);
         return interaction.editReply({ content: `✅ Linked **${sl}** to **${user.tag}** (\`${user.id}\`).` });
       }
 
@@ -2158,7 +2607,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await safeDM(dmUser, `🦉 Lifeline Academy — Student Application Update\n\nSL Username: ${sl}\nStatus: APPROVED\n\nNext Steps:\n${nextSteps}`);
 
-        await oscarLog(guild, `✅ Student approved: ${sl} by ${interaction.user.tag}`);
+        await tammyLog(guild, `✅ Student approved: ${sl} by ${interaction.user.tag}`);
         return interaction.editReply({ content: `✅ Approved student **${sl}** and sent DM (if possible).` });
       }
 
@@ -2184,7 +2633,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await safeDM(dmUser, `🦉 Lifeline Academy — Student Application Update\n\nSL Username: ${sl}\nStatus: DENIED\n\nReason:\n${reason}\n\nIf you have questions, you may open a ticket.`);
 
-        await oscarLog(guild, `❌ Student denied: ${sl} by ${interaction.user.tag}`);
+        await tammyLog(guild, `❌ Student denied: ${sl} by ${interaction.user.tag}`);
         return interaction.editReply({ content: `✅ Denied student **${sl}** and sent DM (if possible).` });
       }
 
@@ -2213,7 +2662,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await safeDM(dmUser, `🦉 Lifeline Academy — Tuition Confirmation\n\nSL Username: ${sl}\nTuition: PAID\nStatus: ENROLLMENT COMPLETE\n\nNext Steps:\n${nextSteps}`);
 
-        await oscarLog(guild, `💰 Tuition confirmed: ${sl} by ${interaction.user.tag}`);
+        await tammyLog(guild, `💰 Tuition confirmed: ${sl} by ${interaction.user.tag}`);
         return interaction.editReply({ content: `✅ Confirmed tuition for **${sl}** and sent DM (if possible).` });
       }
 
@@ -2239,7 +2688,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await safeDM(dmUser, `🦉 Lifeline Academy — Teacher Application Update\n\nSL Username: ${sl}\nStatus: APPROVED\n\nNext Steps:\n${nextSteps}`);
 
-        await oscarLog(guild, `✅ Teacher approved: ${sl} by ${interaction.user.tag}`);
+        await tammyLog(guild, `✅ Teacher approved: ${sl} by ${interaction.user.tag}`);
         return interaction.editReply({ content: `✅ Approved teacher **${sl}** and sent DM (if possible).` });
       }
 
@@ -2265,7 +2714,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await safeDM(dmUser, `🦉 Lifeline Academy — Teacher Application Update\n\nSL Username: ${sl}\nStatus: DENIED\n\nReason:\n${reason}\n\nIf you have questions, you may open a ticket.`);
 
-        await oscarLog(guild, `❌ Teacher denied: ${sl} by ${interaction.user.tag}`);
+        await tammyLog(guild, `❌ Teacher denied: ${sl} by ${interaction.user.tag}`);
         return interaction.editReply({ content: `✅ Denied teacher **${sl}** and sent DM (if possible).` });
       }
 
@@ -2280,34 +2729,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (followupSub === "teacher") {
           const targetUser = interaction.options.getUser("user", true);
-          
+
           await interaction.deferReply({ ephemeral: true }).catch(() => {});
-          
+
           // Look up teacher in Google Sheet by discord_id
           const result = await findRowByDiscordId(TEACHER_SHEET_ID, targetUser.id);
-          
+
           if (!result.found) {
             return interaction.editReply({ content: `❌ Could not find teacher application for ${targetUser.tag}. Make sure they're registered with /academy register-discord.` });
           }
-          
+
           const record = extractRecord(result.headers, result.row);
           const roles = detectTeacherRoles(record['Positions Applying For'] || record['positions_applying_for'] || '');
           const modal = buildTeacherFollowUpModal(targetUser.id, roles);
-          
+
           // Send modal via DM
           try {
             const dmMessage = `🎓 **Lifeline Academy – Follow-Up Required**\n\nHello ${targetUser.username}!\n\nWe're excited about your application! To complete your placement process, please click the button below and fill out the follow-up form. This helps us match you with the best role and schedule.\n\nThank you!`;
-            
+
             const followUpBtn = new ButtonBuilder()
               .setCustomId(`open_teacher_followup:${targetUser.id}:${interaction.user.id}`)
               .setLabel('Complete Follow-Up')
               .setStyle(ButtonStyle.Primary);
-            
+
             const row = new ActionRowBuilder().addComponents(followUpBtn);
-            
+
             await targetUser.send({ content: dmMessage, components: [row] });
-            
-            await oscarLog(guild, `📧 Teacher follow-up sent to ${targetUser.tag} by ${interaction.user.tag}`);
+
+            await tammyLog(guild, `📧 Teacher follow-up sent to ${targetUser.tag} by ${interaction.user.tag}`);
             return interaction.editReply({ content: `✅ Follow-up DM sent to **${targetUser.tag}**. They will complete a modal and responses will be logged to #academy-operations.` });
           } catch (e) {
             return interaction.editReply({ content: `❌ Failed to DM ${targetUser.tag}. They may have DMs disabled.` });
@@ -2317,12 +2766,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (followupSub === "student") {
           const targetUser = interaction.options.getUser("user", true);
           const type = interaction.options.getString("type", true);
-          
+
           await interaction.deferReply({ ephemeral: true }).catch(() => {});
-          
+
           let modal;
           let dmMessage;
-          
+
           if (type === "signature") {
             modal = buildStudentSignatureModal(targetUser.id);
             dmMessage = `🖊️ **Lifeline Academy – Enrollment Completion**\n\nHello!\n\nWe're almost done with your enrollment! We need your digital signature to complete the process. Please click the button below to provide your signature.\n\nThank you!`;
@@ -2330,18 +2779,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
             modal = buildStudentConfirmModal(targetUser.id);
             dmMessage = `🎒 **Lifeline Academy – Information Verification**\n\nHello!\n\nWe need to verify some information in your enrollment application. Please click the button below to confirm the details.\n\nThank you!`;
           }
-          
+
           try {
             const followUpBtn = new ButtonBuilder()
               .setCustomId(`open_student_followup:${type}:${targetUser.id}:${interaction.user.id}`)
               .setLabel('Complete Follow-Up')
               .setStyle(ButtonStyle.Primary);
-            
+
             const row = new ActionRowBuilder().addComponents(followUpBtn);
-            
+
             await targetUser.send({ content: dmMessage, components: [row] });
-            
-            await oscarLog(guild, `📧 Student follow-up (${type}) sent to ${targetUser.tag} by ${interaction.user.tag}`);
+
+            await tammyLog(guild, `📧 Student follow-up (${type}) sent to ${targetUser.tag} by ${interaction.user.tag}`);
             return interaction.editReply({ content: `✅ Follow-up DM (${type}) sent to **${targetUser.tag}**.` });
           } catch (e) {
             return interaction.editReply({ content: `❌ Failed to DM ${targetUser.tag}. They may have DMs disabled.` });
@@ -2350,51 +2799,51 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (followupSub === "student_auto") {
           await interaction.deferReply({ ephemeral: true }).catch(() => {});
-          
+
           // Scan Google Sheet for students with missing signatures
           const sheets = await getSheetsClient();
           const tab = await getFirstTabTitle(STUDENT_SHEET_ID);
           const range = `${tab}!A1:ZZ2000`;
           const res = await sheets.spreadsheets.values.get({ spreadsheetId: STUDENT_SHEET_ID, range });
           const rows = res.data.values || [];
-          
+
           if (!rows.length) {
             return interaction.editReply({ content: '❌ Student sheet is empty.' });
           }
-          
+
           const headers = rows[0];
           let sentCount = 0;
           const errors = [];
-          
+
           for (let i = 1; i < rows.length; i++) {
             const row = rows[i] || [];
             const record = extractRecord(headers, row);
-            
+
             // Check if signature is missing
             if (record.discord_id && (!record.digital_signature || record.digital_signature.trim() === '')) {
               try {
                 const targetUser = await client.users.fetch(record.discord_id).catch(() => null);
-                
+
                 if (targetUser) {
                   const dmMessage = `🖊️ **Lifeline Academy – Enrollment Completion**\n\nHello!\n\nWe're almost done with your enrollment! We need your digital signature to complete the process. Please click the button below to provide your signature.\n\nThank you!`;
-                  
+
                   const followUpBtn = new ButtonBuilder()
                     .setCustomId(`open_student_followup:signature:${targetUser.id}:${interaction.user.id}`)
                     .setLabel('Complete Follow-Up')
                     .setStyle(ButtonStyle.Primary);
-                  
+
                   const rowComp = new ActionRowBuilder().addComponents(followUpBtn);
-                  
+
                   await targetUser.send({ content: dmMessage, components: [rowComp] });
                   sentCount++;
-                  await oscarLog(guild, `📧 Auto follow-up (signature) sent to ${targetUser.tag}`);
+                  await tammyLog(guild, `📧 Auto follow-up (signature) sent to ${targetUser.tag}`);
                 }
               } catch (e) {
                 errors.push(`Failed to send to ${record.student_name || 'Unknown'}`);
               }
             }
           }
-          
+
           return interaction.editReply({ content: `✅ Auto-scan complete. Sent ${sentCount} follow-up(s).${errors.length ? `\n⚠️ ${errors.length} failed.` : ''}` });
         }
       }
@@ -2425,7 +2874,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           `**Class:** ${className}\n**Session ID:** \`${sessionId}\`\n\nStudents use:\n\`/student here session_id:${sessionId} status:Present\``
         );
 
-        await oscarLog(guild, `🧾 Attendance started ${sessionId} (${className}) by ${interaction.user.tag}`);
+        await tammyLog(guild, `🧾 Attendance started ${sessionId} (${className}) by ${interaction.user.tag}`);
         return interaction.editReply({ embeds: [eb] });
       }
 
@@ -2448,7 +2897,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           { name: "Export", value: `Use: \`/staff export_attendance session_id:${sessionId}\`` }
         );
 
-        await oscarLog(guild, `✅ Attendance closed ${sessionId} by ${interaction.user.tag}`);
+        await tammyLog(guild, `✅ Attendance closed ${sessionId} by ${interaction.user.tag}`);
         return interaction.editReply({ embeds: [eb] });
       }
 
@@ -2482,7 +2931,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const lines = groups.map((g, idx) => `**Group ${idx + 1}:** ${g.map((id) => `<@${id}>`).join(" ")}`);
         const eb = embedBase("Random Groups", `Group size: **${size}**`).addFields({ name: "Groups", value: safeSlice(lines.join("\n"), 1024) });
 
-        await oscarLog(guild, `👥 Groups generated by ${interaction.user.tag} (${groups.length} groups)`);
+        await tammyLog(guild, `👥 Groups generated by ${interaction.user.tag} (${groups.length} groups)`);
         return interaction.editReply({ embeds: [eb] });
       }
 
@@ -2490,7 +2939,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const student = interaction.options.getUser("student", true);
         const reason = safeSlice(interaction.options.getString("reason", true), 400);
 
-        const ch = (await fetchTextChannel(guild, OSCAR_PICTURES_CHANNEL_ID)) || interaction.channel;
+        const ch = (await fetchTextChannel(guild, TAMMY_PICTURES_CHANNEL_ID)) || interaction.channel;
         if (!ch || ch.type !== ChannelType.GuildText) {
           return interaction.editReply({ content: "❌ Pictures channel not available." });
         }
@@ -2502,7 +2951,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
 
         await ch.send({ embeds: [eb] });
-        await oscarLog(guild, `🌟 Spotlight posted for ${student.tag} by ${interaction.user.tag}`);
+        await tammyLog(guild, `🌟 Spotlight posted for ${student.tag} by ${interaction.user.tag}`);
         return interaction.editReply({ content: "✅ Spotlight posted." });
       }
 
@@ -2520,7 +2969,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           pointsStore.points[student.id].history = pointsStore.points[student.id].history.slice(0, 50);
           saveJson(FILE_POINTS, pointsStore);
 
-          await oscarLog(guild, `🏆 Points ${amount} -> ${student.tag} (${reason}) by ${interaction.user.tag}`);
+          await tammyLog(guild, `🏆 Points ${amount} -> ${student.tag} (${reason}) by ${interaction.user.tag}`);
           return interaction.editReply({ content: `✅ Updated points for **${student.tag}** by **${amount}**.` });
         }
 
@@ -2549,12 +2998,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 🎓 **Grade Level:** ${grade}
 📚 **Subject:** ${subject}
 📅 **Quarter:** ${quarter}
-⏱️ **Duration:** 
-📖 **Textbook Focus:** 
-🎯 **Learning Objective:** 
-🧠 **RP Application:** 
-📝 **Activity / Steps:** 
-📎 **Worksheet / Resource:** 
+⏱️ **Duration:**
+📖 **Textbook Focus:**
+🎯 **Learning Objective:**
+🧠 **RP Application:**
+📝 **Activity / Steps:**
+📎 **Worksheet / Resource:**
 ⭐ **Teacher Notes:**`;
 
         return interaction.editReply({ content });
@@ -2589,7 +3038,7 @@ ${notes}`;
         s.present[interaction.user.id] = { at: nowISO(), status };
         saveJson(FILE_ATTENDANCE, attendanceStore);
 
-        await oscarLog(guild, `🧾 Attendance mark: ${interaction.user.tag} => ${status} (${sessionId})`);
+        await tammyLog(guild, `🧾 Attendance mark: ${interaction.user.tag} => ${status} (${sessionId})`);
         return interaction.editReply({ content: `✅ Marked **${status}** for session \`${sessionId}\`.` });
       }
 
@@ -2611,7 +3060,7 @@ ${notes}`;
         };
         saveJson(FILE_PASSES, passStore);
 
-        await oscarLog(guild, `🚪 Pass requested ${passId} by ${interaction.user.tag} (${reason})`);
+        await tammyLog(guild, `🚪 Pass requested ${passId} by ${interaction.user.tag} (${reason})`);
         return interaction.editReply({
           content: `✅ Pass request submitted.\n**Pass ID:** \`${passId}\`\nStaff will review shortly.`,
         });
@@ -2627,7 +3076,7 @@ ${notes}`;
         nurseQueueStore.queue.push({ userId: interaction.user.id, userTag: interaction.user.tag, reason, at: nowISO() });
         saveJson(FILE_NURSE_QUEUE, nurseQueueStore);
 
-        await oscarLog(guild, `🏥 Nurse check-in by ${interaction.user.tag}: ${reason}`);
+        await tammyLog(guild, `🏥 Nurse check-in by ${interaction.user.tag}: ${reason}`);
         return interaction.reply({ ephemeral: true, content: "✅ You’re checked in. Please wait to be called." });
       }
 
@@ -2639,7 +3088,7 @@ ${notes}`;
 
         if (!next) return interaction.editReply({ content: "Queue is empty." });
 
-        await oscarLog(guild, `📣 Nurse calling next: ${next.userTag}`);
+        await tammyLog(guild, `📣 Nurse calling next: ${next.userTag}`);
         return interaction.editReply({ content: `🏥 **Nurse is ready for:** <@${next.userId}> (${next.reason})` });
       }
     }
@@ -2669,7 +3118,7 @@ Reason: ${p.reason}
 ${p.details ? `Details: ${p.details}\n` : ""}${notes ? `Notes: ${notes}\n` : ""}`;
 
         await client.users.fetch(p.userId).then((u) => u.send(dmText)).catch(() => {});
-        await oscarLog(guild, `✅ Pass ${passId} => ${decision} by ${interaction.user.tag}`);
+        await tammyLog(guild, `✅ Pass ${passId} => ${decision} by ${interaction.user.tag}`);
 
         return interaction.editReply({ content: `✅ Pass **${passId}** marked **${decision}** and applicant was notified.` });
       }
@@ -2686,7 +3135,7 @@ ${p.details ? `Details: ${p.details}\n` : ""}${notes ? `Notes: ${notes}\n` : ""}
         const tmpPath = path.join(DATA_DIR, `attendance_${sessionId}.csv`);
         fs.writeFileSync(tmpPath, csv, "utf8");
 
-        await oscarLog(guild, `📤 Attendance exported ${sessionId} by ${interaction.user.tag}`);
+        await tammyLog(guild, `📤 Attendance exported ${sessionId} by ${interaction.user.tag}`);
         return interaction.editReply({ content: `✅ Export ready for session \`${sessionId}\`.`, files: [tmpPath] });
       }
     }
@@ -2694,9 +3143,9 @@ ${p.details ? `Details: ${p.details}\n` : ""}${notes ? `Notes: ${notes}\n` : ""}
     console.error("❌ Interaction error:", e);
     try {
       if (interaction.deferred || interaction.replied) {
-        await interaction.followUp({ ephemeral: true, content: "❌ Oscar hit an error while processing that. Check logs." });
+        await interaction.followUp({ ephemeral: true, content: "❌ Tammy Brightwood hit an error while processing that. Check logs." });
       } else {
-        await interaction.reply({ ephemeral: true, content: "❌ Oscar hit an error while processing that. Check logs." });
+        await interaction.reply({ ephemeral: true, content: "❌ Tammy Brightwood hit an error while processing that. Check logs." });
       }
     } catch {}
   }
@@ -2704,7 +3153,7 @@ ${p.details ? `Details: ${p.details}\n` : ""}${notes ? `Notes: ${notes}\n` : ""}
 
 // -------------------- READY --------------------
 client.once(Events.ClientReady, async () => {
-  console.log(`✅ Oscar logged in as ${client.user.tag}`);
+  console.log(`✅ Tammy Brightwood logged in as ${client.user.tag}`);
 
   try {
     await registerCommands();
@@ -2716,14 +3165,14 @@ client.once(Events.ClientReady, async () => {
   setInterval(runDailySchedulers, 20 * 1000);
 
   const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
-  if (guild) await oscarLog(guild, "🦉 Oscar is online. Lifeline Academy systems ready.");
+  if (guild) await tammyLog(guild, "🦉 Tammy Brightwood is online. Lifeline Academy systems ready.");
 });
 
 // -------------------- KEEP-ALIVE SERVER (Web Service friendly) --------------------
 http
   .createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Oscar Bot is alive 🦉");
+    res.end("Tammy Brightwood Bot is alive 🦉");
   })
   .listen(PORT, () => console.log(`🌐 Keep-alive server running on port ${PORT}`));
 

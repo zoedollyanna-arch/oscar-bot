@@ -1,5 +1,5 @@
 {
-  "name": "oscar-bot",
+  "name": "tammy-bot",
   "version": "1.0.0",
   "main": "index.js",
   "type": "commonjs",
@@ -9,6 +9,7 @@
   "dependencies": {
     "discord.js": "^14.16.0",
     "dotenv": "^16.4.5",
-    "googleapis": "^170.1.0"
+    "googleapis": "^170.1.0",
+    "uuid": "^9.0.1"
   }
 }
