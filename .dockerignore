@@ -1,0 +1,11 @@
+# Keep the Docker build context small and clean.
+**/bin/
+**/obj/
+node_modules/
+*.csv
+.git/
+.env
+**/.vs/
+**/.idea/
+# LibreMetaverse test/rendering/voice projects aren't needed to build TammyAgent, but the
+# ProjectReference only pulls in LibreMetaverse core + its dependencies, so we keep the tree.

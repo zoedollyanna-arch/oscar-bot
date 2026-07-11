@@ -1,0 +1,29 @@
+using System.Threading.Tasks;
+using LibreMetaverse;
+
+namespace TestClient.Commands.Appearance
+{
+    /// <summary>
+    /// Set avatars current appearance to appearance last stored on simulator
+    /// </summary>
+    public class AppearanceCommand : Command
+    {
+        public AppearanceCommand(TestClient testClient)
+        {
+            Name = "appearance";
+            Description = "Set your current appearance to your last saved appearance. Usage: appearance [rebake]";
+            Category = CommandCategory.Appearance;
+        }
+
+        public override string Execute(string[] args, UUID fromAgentID)
+        {
+            return ExecuteAsync(args, fromAgentID).GetAwaiter().GetResult();
+        }
+
+        public override Task<string> ExecuteAsync(string[] args, UUID fromAgentID)
+        {
+            Client.Appearance.RequestSetAppearance((args.Length > 0 && args[0].Equals("rebake")));
+            return Task.FromResult("Appearance sequence started");
+        }
+    }
+}

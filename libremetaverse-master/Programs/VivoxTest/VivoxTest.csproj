@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <OutputPath>..\..\bin\</OutputPath>
+    <TargetFrameworks>net481;net8.0;net9.0;net10.0</TargetFrameworks>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <IsPackable>false</IsPackable>
+    <PackageId>VivoxTest</PackageId>
+    <RootNamespace>VoiceTest</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\LibreMetaverse\LibreMetaverse.csproj" />
+    <ProjectReference Include="..\..\LibreMetaverse.Types\LibreMetaverse.Types.csproj" />
+    <ProjectReference Include="..\..\LibreMetaverse.Voice.Vivox\LibreMetaverse.Voice.Vivox.csproj" />
+  </ItemGroup>
+</Project>

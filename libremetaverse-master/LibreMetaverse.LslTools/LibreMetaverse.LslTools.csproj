@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net481;net8.0;net9.0;net10.0</TargetFrameworks>
+    <Nullable>disable</Nullable>
+    <AssemblyName>LibreMetaverse.LslTools</AssemblyName>
+    <PackageId>LibreMetaverse.LslTools</PackageId>
+    <Description>Lexer and parser tools for the Linden Scripting Language (LSL), enabling tokenization and syntax analysis of LSL scripts within the LibreMetaverse ecosystem.</Description>
+    <RootNamespace>Tools</RootNamespace>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <NoWarn>$(NoWarn);SYSLIB0001;CS0419;CS1591;CS1574</NoWarn>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <OutputPath>..\bin\</OutputPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DefineConstants>TRACE;DEBUG</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <DefineConstants>TRACE</DefineConstants>
+  </PropertyGroup>
+  </Project>

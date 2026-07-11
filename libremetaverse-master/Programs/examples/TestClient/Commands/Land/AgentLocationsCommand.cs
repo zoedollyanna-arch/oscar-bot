@@ -1,0 +1,55 @@
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using LibreMetaverse;
+
+namespace TestClient.Commands.Land
+{
+    /// <summary>
+    /// Display a list of all agent locations in a specified region
+    /// </summary>
+    public class AgentLocationsCommand : Command
+    {
+        public AgentLocationsCommand(TestClient testClient)
+        {
+            Name = "agentlocations";
+            Description = "Downloads all of the agent locations in a specified region. Usage: agentlocations [regionhandle]";
+            Category = CommandCategory.Simulator;
+        }
+
+        public override string Execute(string[] args, UUID fromAgentID)
+        {
+            return ExecuteAsync(args, fromAgentID).GetAwaiter().GetResult();
+        }
+
+        public override async Task<string> ExecuteAsync(string[] args, UUID fromAgentID)
+        {
+            ulong regionHandle;
+
+            if (args.Length == 0)
+                regionHandle = Client.Network.CurrentSim.Handle;
+            else if (!(args.Length == 1 && ulong.TryParse(args[0], out regionHandle)))
+                return "Usage: agentlocations [regionhandle]";
+
+            var items = await Client.Grid.MapItemsAsync(regionHandle, GridItemType.AgentLocations,
+                GridLayerType.Objects).ConfigureAwait(false);
+
+            if (items.Count > 0)
+            {
+                StringBuilder ret = new StringBuilder();
+                ret.AppendLine("Agent locations:");
+
+                foreach (var location in items.Cast<MapAgentLocation>())
+                {
+                    ret.AppendLine($"{location.AvatarCount} avatar(s) at {location.LocalX},{location.LocalY}");
+                }
+
+                return ret.ToString();
+            }
+            else
+            {
+                return "Failed to fetch agent locations";
+            }
+        }
+    }
+}

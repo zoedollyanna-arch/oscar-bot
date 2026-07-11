@@ -1,0 +1,445 @@
+/*
+ * Copyright (c) 2006-2016, openmetaverse.co
+ * Copyright (c) 2025, Sjofn LLC.
+ * All rights reserved.
+ *
+ * - Redistribution and use in source and binary forms, with or without
+ *   modification, are permitted provided that the following conditions are met:
+ *
+ * - Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
+ * - Neither the name of the openmetaverse.co nor the names
+ *   of its contributors may be used to endorse or promote products derived from
+ *   this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
+using System.Runtime.InteropServices;
+
+namespace LibreMetaverse
+{
+    /// <summary>
+    /// A three-dimensional vector with floating-point values
+    /// </summary>
+    [Serializable]
+    [StructLayout(LayoutKind.Sequential)]
+    public readonly struct Vector3 : IComparable<Vector3>, IEquatable<Vector3>
+    {
+        /// <summary>X value</summary>
+        public readonly float X;
+
+        /// <summary>Y value</summary>
+        public readonly float Y;
+
+        /// <summary>Z value</summary>
+        public readonly float Z;
+
+        #region Constructors
+
+        public Vector3(float x, float y, float z)
+        {
+            X = x;
+            Y = y;
+            Z = z;
+        }
+
+        public Vector3(float value)
+        {
+            X = value;
+            Y = value;
+            Z = value;
+        }
+
+        public Vector3(Vector2 value, float z)
+        {
+            X = value.X;
+            Y = value.Y;
+            Z = z;
+        }
+
+        public Vector3(Vector3d vector)
+        {
+            X = (float)vector.X;
+            Y = (float)vector.Y;
+            Z = (float)vector.Z;
+        }
+
+        /// <summary>
+        /// Constructor, builds a vector from a byte array
+        /// </summary>
+        /// <param name="byteArray">Byte array containing three four-byte floats</param>
+        /// <param name="pos">Beginning position in the byte array</param>
+        public Vector3(byte[] byteArray, int pos)
+        {
+            X = Utils.ReadSingleLittleEndian(byteArray, pos);
+            Y = Utils.ReadSingleLittleEndian(byteArray, pos + 4);
+            Z = Utils.ReadSingleLittleEndian(byteArray, pos + 8);
+        }
+
+        #endregion Constructors
+
+        #region Public Methods
+
+        public float Length()
+        {
+            return (float)Math.Sqrt(DistanceSquared(this, Zero));
+        }
+
+        public float LengthSquared()
+        {
+            return DistanceSquared(this, Zero);
+        }
+
+        /// <summary>
+        /// Test if this vector is equal to another vector, within a given
+        /// tolerance range
+        /// </summary>
+        public bool ApproxEquals(Vector3 vec, float tolerance)
+        {
+            Vector3 diff = this - vec;
+            return (diff.LengthSquared() <= tolerance * tolerance);
+        }
+
+        /// <summary>
+        /// IComparable.CompareTo implementation
+        /// </summary>
+        public int CompareTo(Vector3 vector)
+        {
+            return Length().CompareTo(vector.Length());
+        }
+
+        /// <summary>
+        /// Test if this vector is composed of all finite numbers
+        /// </summary>
+        public bool IsFinite()
+        {
+            return (Utils.IsFinite(X) && Utils.IsFinite(Y) && Utils.IsFinite(Z));
+        }
+
+        /// <summary>
+        /// Returns a new Vector3 parsed from 12 bytes starting at <paramref name="pos"/> in the source array.
+        /// </summary>
+        public static Vector3 FromBytes(byte[] byteArray, int pos) => new Vector3(byteArray, pos);
+
+        /// <summary>
+        /// Returns the raw bytes for this vector
+        /// </summary>
+        public byte[] GetBytes()
+        {
+            byte[] byteArray = new byte[12];
+            ToBytes(byteArray, 0);
+            return byteArray;
+        }
+
+        /// <summary>
+        /// Writes the raw bytes for this vector to a byte array
+        /// </summary>
+        public void ToBytes(byte[] dest, int pos)
+        {
+            Utils.WriteSingleLittleEndian(dest, pos, X);
+            Utils.WriteSingleLittleEndian(dest, pos + 4, Y);
+            Utils.WriteSingleLittleEndian(dest, pos + 8, Z);
+        }
+
+        #endregion Public Methods
+
+        #region Static Methods
+
+        public static Vector3 Add(Vector3 value1, Vector3 value2)
+        {
+            return new Vector3(value1.X + value2.X, value1.Y + value2.Y, value1.Z + value2.Z);
+        }
+
+        public static Vector3 Clamp(Vector3 value1, Vector3 min, Vector3 max)
+        {
+            return new Vector3(
+                Utils.Clamp(value1.X, min.X, max.X),
+                Utils.Clamp(value1.Y, min.Y, max.Y),
+                Utils.Clamp(value1.Z, min.Z, max.Z));
+        }
+
+        public static Vector3 Cross(Vector3 value1, Vector3 value2)
+        {
+            return new Vector3(
+                value1.Y * value2.Z - value2.Y * value1.Z,
+                value1.Z * value2.X - value2.Z * value1.X,
+                value1.X * value2.Y - value2.X * value1.Y);
+        }
+
+        public static float Distance(Vector3 value1, Vector3 value2)
+        {
+            return (float)Math.Sqrt(DistanceSquared(value1, value2));
+        }
+
+        public static float DistanceSquared(Vector3 value1, Vector3 value2)
+        {
+            return
+                (value1.X - value2.X) * (value1.X - value2.X) +
+                (value1.Y - value2.Y) * (value1.Y - value2.Y) +
+                (value1.Z - value2.Z) * (value1.Z - value2.Z);
+        }
+
+        public static Vector3 Divide(Vector3 value1, Vector3 value2)
+        {
+            return new Vector3(value1.X / value2.X, value1.Y / value2.Y, value1.Z / value2.Z);
+        }
+
+        public static Vector3 Divide(Vector3 value1, float value2)
+        {
+            float factor = 1f / value2;
+            return new Vector3(value1.X * factor, value1.Y * factor, value1.Z * factor);
+        }
+
+        public static float Dot(Vector3 value1, Vector3 value2)
+        {
+            return value1.X * value2.X + value1.Y * value2.Y + value1.Z * value2.Z;
+        }
+
+        public static Vector3 Lerp(Vector3 value1, Vector3 value2, float amount)
+        {
+            return new Vector3(
+                Utils.Lerp(value1.X, value2.X, amount),
+                Utils.Lerp(value1.Y, value2.Y, amount),
+                Utils.Lerp(value1.Z, value2.Z, amount));
+        }
+
+        public static float Mag(Vector3 value)
+        {
+            return (float)Math.Sqrt((value.X * value.X) + (value.Y * value.Y) + (value.Z * value.Z));
+        }
+
+        public static Vector3 Max(Vector3 value1, Vector3 value2)
+        {
+            return new Vector3(
+                Math.Max(value1.X, value2.X),
+                Math.Max(value1.Y, value2.Y),
+                Math.Max(value1.Z, value2.Z));
+        }
+
+        public static Vector3 Min(Vector3 value1, Vector3 value2)
+        {
+            return new Vector3(
+                Math.Min(value1.X, value2.X),
+                Math.Min(value1.Y, value2.Y),
+                Math.Min(value1.Z, value2.Z));
+        }
+
+        public static Vector3 Multiply(Vector3 value1, Vector3 value2)
+        {
+            return new Vector3(value1.X * value2.X, value1.Y * value2.Y, value1.Z * value2.Z);
+        }
+
+        public static Vector3 Multiply(Vector3 value1, float scaleFactor)
+        {
+            return new Vector3(value1.X * scaleFactor, value1.Y * scaleFactor, value1.Z * scaleFactor);
+        }
+
+        public static Vector3 Negate(Vector3 value)
+        {
+            return new Vector3(-value.X, -value.Y, -value.Z);
+        }
+
+        public static Vector3 Normalize(Vector3 value)
+        {
+            const float MAG_THRESHOLD = 0.0000001f;
+            float factor = Distance(value, Zero);
+            if (factor > MAG_THRESHOLD)
+            {
+                factor = 1f / factor;
+                return new Vector3(value.X * factor, value.Y * factor, value.Z * factor);
+            }
+            return Zero;
+        }
+
+        /// <summary>
+        /// Parse a vector from a string
+        /// </summary>
+        public static Vector3 Parse(string val)
+        {
+            if (val == null) throw new ArgumentNullException(nameof(val));
+            string trimmed = val.Trim();
+            if (trimmed.Length >= 2 && trimmed[0] == '<' && trimmed[trimmed.Length - 1] == '>')
+                trimmed = trimmed.Substring(1, trimmed.Length - 2);
+
+            string[] split = trimmed.Split(',');
+            if (split.Length != 3) throw new FormatException("Input string was not in a correct format.");
+
+            return new Vector3(
+                float.Parse(split[0].Trim(), Utils.EnUsCulture),
+                float.Parse(split[1].Trim(), Utils.EnUsCulture),
+                float.Parse(split[2].Trim(), Utils.EnUsCulture));
+        }
+
+        public static bool TryParse(string val, out Vector3 result)
+        {
+            try
+            {
+                result = Parse(val);
+                return true;
+            }
+            catch (Exception)
+            {
+                result = Vector3.Zero;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Calculate the rotation between two vectors
+        /// </summary>
+        public static Quaternion RotationBetween(Vector3 a, Vector3 b)
+        {
+            float dotProduct = Dot(a, b);
+            Vector3 crossProduct = Cross(a, b);
+            float magProduct = a.Length() * b.Length();
+            double angle = Math.Acos(dotProduct / magProduct);
+            Vector3 axis = Normalize(crossProduct);
+            float s = (float)Math.Sin(angle / 2d);
+
+            return new Quaternion(
+                axis.X * s,
+                axis.Y * s,
+                axis.Z * s,
+                (float)Math.Cos(angle / 2d));
+        }
+
+        /// <summary>
+        /// Interpolates between two vectors using a cubic equation
+        /// </summary>
+        public static Vector3 SmoothStep(Vector3 value1, Vector3 value2, float amount)
+        {
+            return new Vector3(
+                Utils.SmoothStep(value1.X, value2.X, amount),
+                Utils.SmoothStep(value1.Y, value2.Y, amount),
+                Utils.SmoothStep(value1.Z, value2.Z, amount));
+        }
+
+        public static Vector3 Subtract(Vector3 value1, Vector3 value2)
+        {
+            return new Vector3(value1.X - value2.X, value1.Y - value2.Y, value1.Z - value2.Z);
+        }
+
+        public static Vector3 Transform(Vector3 position, Matrix4 matrix)
+        {
+            return new Vector3(
+                (position.X * matrix.M11) + (position.Y * matrix.M21) + (position.Z * matrix.M31) + matrix.M41,
+                (position.X * matrix.M12) + (position.Y * matrix.M22) + (position.Z * matrix.M32) + matrix.M42,
+                (position.X * matrix.M13) + (position.Y * matrix.M23) + (position.Z * matrix.M33) + matrix.M43);
+        }
+
+        public static Vector3 TransformNormal(Vector3 position, Matrix4 matrix)
+        {
+            return new Vector3(
+                (position.X * matrix.M11) + (position.Y * matrix.M21) + (position.Z * matrix.M31),
+                (position.X * matrix.M12) + (position.Y * matrix.M22) + (position.Z * matrix.M32),
+                (position.X * matrix.M13) + (position.Y * matrix.M23) + (position.Z * matrix.M33));
+        }
+
+        #endregion Static Methods
+
+        #region Overrides
+
+        public override bool Equals(object? obj)
+        {
+            return (obj is Vector3 v3) && this == v3;
+        }
+
+        public bool Equals(Vector3 other)
+        {
+            return this == other;
+        }
+
+        public override int GetHashCode()
+        {
+            int hash = X.GetHashCode();
+            hash = hash * 31 + Y.GetHashCode();
+            hash = hash * 31 + Z.GetHashCode();
+            return hash;
+        }
+
+        public override string ToString()
+        {
+            return string.Format(Utils.EnUsCulture, "<{0}, {1}, {2}>", X, Y, Z);
+        }
+
+        public string ToRawString()
+        {
+            return string.Format(Utils.EnUsCulture, "{0:F3} {1:F3} {2:F3}", X, Y, Z);
+        }
+
+        #endregion Overrides
+
+        #region Operators
+
+        public static bool operator ==(Vector3 value1, Vector3 value2)
+        {
+            return value1.X == value2.X
+                && value1.Y == value2.Y
+                && value1.Z == value2.Z;
+        }
+
+        public static bool operator !=(Vector3 value1, Vector3 value2)
+        {
+            return !(value1 == value2);
+        }
+
+        public static Vector3 operator +(Vector3 value1, Vector3 value2) => Add(value1, value2);
+
+        public static Vector3 operator -(Vector3 value) => Negate(value);
+
+        public static Vector3 operator -(Vector3 value1, Vector3 value2) => Subtract(value1, value2);
+
+        public static Vector3 operator *(Vector3 value1, Vector3 value2) => Multiply(value1, value2);
+
+        public static Vector3 operator *(Vector3 value, float scaleFactor) => Multiply(value, scaleFactor);
+
+        public static Vector3 operator *(Vector3 vec, Quaternion rot)
+        {
+            float rw = -rot.X * vec.X - rot.Y * vec.Y - rot.Z * vec.Z;
+            float rx = rot.W * vec.X + rot.Y * vec.Z - rot.Z * vec.Y;
+            float ry = rot.W * vec.Y + rot.Z * vec.X - rot.X * vec.Z;
+            float rz = rot.W * vec.Z + rot.X * vec.Y - rot.Y * vec.X;
+
+            return new Vector3(
+                -rw * rot.X + rx * rot.W - ry * rot.Z + rz * rot.Y,
+                -rw * rot.Y + ry * rot.W - rz * rot.X + rx * rot.Z,
+                -rw * rot.Z + rz * rot.W - rx * rot.Y + ry * rot.X);
+        }
+
+        public static Vector3 operator *(Vector3 vector, Matrix4 matrix) => Transform(vector, matrix);
+
+        public static Vector3 operator /(Vector3 value1, Vector3 value2) => Divide(value1, value2);
+
+        public static Vector3 operator /(Vector3 value, float divider) => Divide(value, divider);
+
+        /// <summary>Cross product between two vectors</summary>
+        public static Vector3 operator %(Vector3 value1, Vector3 value2) => Cross(value1, value2);
+
+        public static explicit operator Vector3(Vector3d value) => new Vector3(value);
+
+        #endregion Operators
+
+        /// <summary>A vector with a value of 0,0,0</summary>
+        public static readonly Vector3 Zero = new Vector3();
+        /// <summary>A vector with a value of 1,1,1</summary>
+        public static readonly Vector3 One = new Vector3(1f, 1f, 1f);
+        /// <summary>A unit vector facing forward (X axis), value 1,0,0</summary>
+        public static readonly Vector3 UnitX = new Vector3(1f, 0f, 0f);
+        /// <summary>A unit vector facing left (Y axis), value 0,1,0</summary>
+        public static readonly Vector3 UnitY = new Vector3(0f, 1f, 0f);
+        /// <summary>A unit vector facing up (Z axis), value 0,0,1</summary>
+        public static readonly Vector3 UnitZ = new Vector3(0f, 0f, 1f);
+    }
+}

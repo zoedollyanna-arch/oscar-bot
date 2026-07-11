@@ -1,0 +1,140 @@
+using System.Linq;
+using System.Threading.Tasks;
+using LibreMetaverse;
+using LibreMetaverse.Packets;
+#nullable enable
+
+namespace TestClient.Commands.Movement
+{
+    public class FollowCommand: Command
+    {
+        const float DISTANCE_BUFFER = 3.0f;
+        uint targetLocalID = 0;
+
+        public FollowCommand(TestClient testClient)
+        {
+            Name = "follow";
+            Description = "Follow another avatar. Usage: follow [FirstName LastName]/off.";
+            Category = CommandCategory.Movement;
+
+            testClient.Network.RegisterCallback(PacketType.AlertMessage, AlertMessageHandler);
+        }
+
+        public override string Execute(string[] args, UUID fromAgentID)
+        {
+            return ExecuteAsync(args, fromAgentID).GetAwaiter().GetResult();
+        }
+
+        public override Task<string> ExecuteAsync(string[] args, UUID fromAgentID)
+        {
+            // Construct the target name from the passed arguments
+            string target = string.Join(" ", args).TrimEnd();
+
+            if (string.IsNullOrEmpty(target) || target == "off")
+            {
+                Active = false;
+                targetLocalID = 0;
+                Client.Self.AutoPilotCancel();
+                return Task.FromResult("Following is off");
+            }
+            else
+            {
+                return Task.FromResult(Follow(target)
+                    ? $"Following {target}."
+                    : $"Unable to follow {target}. Client may not be able to see the target avatar.");
+            }
+        }
+
+        bool Follow(string name)
+        {
+            lock (Client.Network.Simulators)
+            {
+                foreach (var sim in Client.Network.Simulators)
+                {
+                    var match = sim.ObjectsAvatars.FirstOrDefault(avatar => avatar.Value != null && avatar.Value.Name == name);
+                    if (match.Value != null)
+                    {
+                        targetLocalID = match.Value.LocalID;
+                        Active = true;
+                        return true;
+                    }
+                }
+            }
+
+            if (Active)
+            {
+                Client.Self.AutoPilotCancel();
+                Active = false;
+            }
+
+            return false;
+        }
+
+        public override void Think()
+        {
+            if (Active)
+            {
+                // Find the target position
+                lock (Client.Network.Simulators)
+                {
+                    foreach (var t in Client.Network.Simulators)
+                    {
+                        Avatar? targetAv;
+
+                        if (t.ObjectsAvatars.TryGetValue(targetLocalID, out targetAv) && targetAv != null)
+                        {
+                            float distance = 0.0f;
+
+                            if (t == Client.Network.CurrentSim)
+                            {
+                                distance = Vector3.Distance(targetAv.Position, Client.Self.SimPosition);
+                            }
+                            else
+                            {
+                                // FIXME: Calculate global distances
+                            }
+
+                            if (distance > DISTANCE_BUFFER)
+                            {
+                                uint regionX, regionY;
+                                Utils.LongToUInts(t.Handle, out regionX, out regionY);
+
+                                double xTarget = (double)targetAv.Position.X + (double)regionX;
+                                double yTarget = (double)targetAv.Position.Y + (double)regionY;
+                                double zTarget = targetAv.Position.Z - 2f;
+
+                                Logger.DebugLog(
+                                    $"[Autopilot] {distance} meters away from the target, starting autopilot to <{xTarget},{yTarget},{zTarget}>", Client);
+
+                                Client.Self.AutoPilot(xTarget, yTarget, zTarget);
+                            }
+                            else
+                            {
+                                // We are in range of the target and moving, stop moving
+                                Client.Self.AutoPilotCancel();
+                            }
+                        }
+                    }
+                }
+            }
+
+            base.Think();
+        }
+
+        private void AlertMessageHandler(object? sender, PacketReceivedEventArgs e)
+        {
+            Packet packet = e.Packet;
+
+            AlertMessagePacket alert = (AlertMessagePacket)packet;
+            if (alert.AlertInfo.Length > 0)
+            {
+                string id = Utils.BytesToString(alert.AlertInfo[0].Message);
+                if (id == "AutopilotCanceled")
+                {
+                    Logger.Info("FollowCommand: " + Utils.BytesToString(alert.AlertData.Message), Client);
+                }
+            }
+        }
+    }
+}
+

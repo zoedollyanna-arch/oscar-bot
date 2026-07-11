@@ -1,0 +1,405 @@
+/*
+ * Copyright (c) 2006-2016, openmetaverse.co
+ * All rights reserved.
+ *
+ * - Redistribution and use in source and binary forms, with or without 
+ *   modification, are permitted provided that the following conditions are met:
+ *
+ * - Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
+ * - Neither the name of the openmetaverse.co nor the names 
+ *   of its contributors may be used to endorse or promote products derived from
+ *   this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using LibreMetaverse.Assets;
+using LibreMetaverse.Packets;
+using LibreMetaverse.StructuredData;
+
+namespace LibreMetaverse
+{
+    public class TerrainManager : IDisposable
+    {
+        /// <summary>Number of PBR terrain material slots (LLTerrainMaterials::ASSET_COUNT in the
+        /// reference viewer): one override per terrain texture blend slot.</summary>
+        public const int TerrainMaterialSlotCount = 4;
+
+        #region EventHandling
+        /// <summary>The event subscribers. null if no subscribers</summary>
+        private EventHandler<LandPatchReceivedEventArgs>? m_LandPatchReceivedEvent;
+
+        /// <summary>Raises the LandPatchReceived event</summary>
+        /// <param name="e">A LandPatchReceivedEventArgs object containing the
+        /// data returned from the simulator</param>
+        protected virtual void OnLandPatchReceived(LandPatchReceivedEventArgs e)
+        {
+            EventHandler<LandPatchReceivedEventArgs>? handler = m_LandPatchReceivedEvent;
+            handler?.Invoke(this, e);
+        }
+
+        /// <summary>Thread sync lock object</summary>
+        private readonly object m_LandPatchReceivedLock = new object();
+
+        /// <summary>Raised when the simulator responds sends </summary>
+        public event EventHandler<LandPatchReceivedEventArgs> LandPatchReceived
+        {
+            add { lock (m_LandPatchReceivedLock) { m_LandPatchReceivedEvent += value; } }
+            remove { lock (m_LandPatchReceivedLock) { m_LandPatchReceivedEvent -= value; } }
+        }
+        #endregion
+
+        private readonly GridClient Client;
+
+        /// <summary>
+        /// Default constructor
+        /// </summary>
+        /// <param name="client"></param>
+        public TerrainManager(GridClient client)
+        {
+            Client = client;
+            Client.Network.RegisterCallback(PacketType.LayerData, LayerDataHandler);
+        }
+
+        private void DecompressLand(Simulator simulator, BitPack bitpack, TerrainPatch.GroupHeader group, bool largeRegion = false)
+        {
+            int x;
+            int y;
+            int[] patches = new int[32 * 32];
+            int count = 0;
+
+            while (true)
+            {
+                TerrainPatch.Header header = TerrainCompressor.DecodePatchHeader(bitpack, largeRegion);
+
+                if (header.QuantWBits == TerrainCompressor.END_OF_PATCHES)
+                    break;
+
+                x = header.X;
+                y = header.Y;
+
+                if (!largeRegion && (x >= TerrainCompressor.PATCHES_PER_EDGE || y >= TerrainCompressor.PATCHES_PER_EDGE))
+                {
+                    Logger.Warn(String.Format(
+                        "Invalid LayerData land packet, x={0}, y={1}, dc_offset={2}, range={3}, quant_wbits={4}, patchids={5}, count={6}",
+                        x, y, header.DCOffset, header.Range, header.QuantWBits, header.PatchIDs, count), Client);
+                    return;
+                }
+
+                // Decode this patch
+                TerrainCompressor.DecodePatch(patches, bitpack, header, group.PatchSize);
+
+                // Decompress this patch
+                float[] heightmap = TerrainCompressor.DecompressPatch(patches, header, group);
+
+                count++;
+
+                try { OnLandPatchReceived(new LandPatchReceivedEventArgs(simulator, x, y, group.PatchSize, heightmap)); }
+                catch (Exception e) { Logger.Error(e.Message, e, Client); }
+
+                if (Client.Settings.World.StoreLandPatches)
+                {
+                    TerrainPatch patch = new TerrainPatch
+                    {
+                        Data = heightmap,
+                        X = x,
+                        Y = y
+                    };
+                    simulator.Terrain[y * 16 + x] = patch;
+                }
+            }
+        }
+
+        private void DecompressWind(Simulator simulator, BitPack bitpack, TerrainPatch.GroupHeader group, bool largeRegion = false)
+        {
+            int[] patches = new int[32 * 32];
+
+            // Ignore the simulator stride value
+            group.Stride = group.PatchSize;
+
+            // Each wind packet contains the wind speeds and direction for the entire simulator
+            // stored as two float arrays. The first array is the X value of the wind speed at
+            // each 16x16m block, second is the Y value.
+            // wind_speed = distance(x,y to 0,0)
+            // wind_direction = vec2(x,y)
+
+            // X values
+            TerrainPatch.Header header = TerrainCompressor.DecodePatchHeader(bitpack, largeRegion);
+            TerrainCompressor.DecodePatch(patches, bitpack, header, group.PatchSize);
+            float[] xvalues = TerrainCompressor.DecompressPatch(patches, header, group);
+
+            // Y values
+            header = TerrainCompressor.DecodePatchHeader(bitpack, largeRegion);
+            TerrainCompressor.DecodePatch(patches, bitpack, header, group.PatchSize);
+            float[] yvalues = TerrainCompressor.DecompressPatch(patches, header, group);
+
+            if (simulator.Client.Settings.World.StoreLandPatches && simulator.WindSpeeds != null)
+            {
+                for (int i = 0; i < Math.Min(256, simulator.WindSpeeds.Length); i++)
+                    simulator.WindSpeeds[i] = new Vector2(xvalues[i], yvalues[i]);
+            }
+        }
+
+        private void DecompressCloud(Simulator simulator, BitPack bitpack, TerrainPatch.GroupHeader group)
+        {
+            // FIXME:
+        }
+
+        private void LayerDataHandler(object? sender, PacketReceivedEventArgs e)
+        {
+            LayerDataPacket layer = (LayerDataPacket)e.Packet;
+            BitPack bitpack = new BitPack(layer.LayerData.Data, 0);
+            TerrainPatch.GroupHeader header = new TerrainPatch.GroupHeader();
+            TerrainPatch.LayerType type = (TerrainPatch.LayerType)layer.LayerID.Type;
+
+            // Stride
+            header.Stride = bitpack.UnpackBits(16);
+            // Patch size
+            header.PatchSize = bitpack.UnpackBits(8);
+            // Layer type
+            header.Type = (TerrainPatch.LayerType)bitpack.UnpackBits(8);
+
+            switch (type)
+            {
+                case TerrainPatch.LayerType.Land:
+                    if (m_LandPatchReceivedEvent != null || Client.Settings.World.StoreLandPatches)
+                    {
+                        var sim = e.Simulator ?? Client?.Network?.CurrentSim;
+                        if (sim != null) DecompressLand(sim, bitpack, header);
+                    }
+                    break;
+                case TerrainPatch.LayerType.LandExtended:
+                    if (m_LandPatchReceivedEvent != null || Client.Settings.World.StoreLandPatches)
+                    {
+                        var sim = e.Simulator ?? Client?.Network?.CurrentSim;
+                        if (sim != null) DecompressLand(sim, bitpack, header, true);
+                    }
+                    break;
+                case TerrainPatch.LayerType.Water:
+                    Logger.Error("Got a Water LayerData packet, implement me!", Client);
+                    break;
+                case TerrainPatch.LayerType.Wind:
+                {
+                    var sim = e.Simulator ?? Client?.Network?.CurrentSim;
+                    if (sim != null) DecompressWind(sim, bitpack, header);
+                    break;
+                }
+                case TerrainPatch.LayerType.Cloud:
+                    DecompressCloud(e.Simulator, bitpack, header);
+                    break;
+                default:
+                    Logger.Warn("Unrecognized LayerData type " + type, Client);
+                    break;
+            }
+        }
+
+        #region PBR Terrain Materials (ModifyRegion)
+
+        /// <summary>
+        /// Queries the region's PBR terrain material overrides via the ModifyRegion capability.
+        /// Mirrors LLPBRTerrainFeatures::queryRegionCoro (llpbrterrainfeatures.cpp). Each of the 4
+        /// returned slots is null when that terrain texture blend slot has no material override.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>An array of exactly <see cref="TerrainMaterialSlotCount"/> entries, or null if
+        /// the capability is unavailable or the request fails</returns>
+        public async Task<AssetMaterial?[]?> GetTerrainMaterialOverridesAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            Uri? cap = Client.Network.CurrentSim?.Caps?.CapabilityURI("ModifyRegion");
+            if (cap == null)
+            {
+                Logger.Warn("ModifyRegion capability not available.", Client);
+                return null;
+            }
+
+            try
+            {
+                var (response, data) = await Client.HttpCapsClient.GetAsync(cap, cancellationToken).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    Logger.Warn($"ModifyRegion GET non-success status: {response.StatusCode}", Client);
+                    return null;
+                }
+                if (data == null) { return null; }
+
+                if (!(OSDParser.Deserialize(data) is OSDMap map))
+                {
+                    Logger.Warn("ModifyRegion returned an unexpected payload.", Client);
+                    return null;
+                }
+                if (!map["success"].AsBoolean())
+                {
+                    Logger.Warn($"Failed to query PBR terrain features: {map["message"].AsString()}", Client);
+                    return null;
+                }
+
+                if (!(map["overrides"] is OSDArray overrides) || overrides.Count < TerrainMaterialSlotCount)
+                {
+                    Logger.Warn("ModifyRegion response missing/invalid overrides array.", Client);
+                    return null;
+                }
+
+                var result = new AssetMaterial?[TerrainMaterialSlotCount];
+                for (var i = 0; i < TerrainMaterialSlotCount; i++)
+                {
+                    if (overrides[i] is OSDMap entry && entry.Count > 0)
+                    {
+                        result[i] = AssetMaterial.FromOverrideOsd(entry);
+                    }
+                }
+                return result;
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                Logger.Error("Failed querying ModifyRegion", ex, Client);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Sets the region's PBR terrain material overrides via the ModifyRegion capability.
+        /// Mirrors LLPBRTerrainFeatures::queueModify/modifyRegionCoro (llpbrterrainfeatures.cpp).
+        /// Requires edit-terrain rights on the region.
+        /// </summary>
+        /// <param name="overrides">Exactly <see cref="TerrainMaterialSlotCount"/> entries; a null
+        /// entry clears that terrain texture blend slot's override</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>True if the server accepted the change</returns>
+        public async Task<bool> SetTerrainMaterialOverridesAsync(AssetMaterial?[] overrides, CancellationToken cancellationToken = default)
+        {
+            if (overrides == null) { throw new ArgumentNullException(nameof(overrides)); }
+            if (overrides.Length != TerrainMaterialSlotCount)
+            {
+                throw new ArgumentException($"Expected exactly {TerrainMaterialSlotCount} entries.", nameof(overrides));
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+
+            Uri? cap = Client.Network.CurrentSim?.Caps?.CapabilityURI("ModifyRegion");
+            if (cap == null)
+            {
+                Logger.Warn("ModifyRegion capability not available.", Client);
+                return false;
+            }
+
+            var overrideArray = new OSDArray(TerrainMaterialSlotCount);
+            foreach (var mat in overrides)
+            {
+                overrideArray.Add(mat?.ToOverrideOsd() ?? new OSDMap());
+            }
+            var body = new OSDMap { ["overrides"] = overrideArray };
+
+            try
+            {
+                var (response, data) = await Client.HttpCapsClient.PostAsync(cap, OSDFormat.Xml, body, cancellationToken).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    Logger.Warn($"ModifyRegion POST non-success status: {response.StatusCode}", Client);
+                    return false;
+                }
+                if (data == null) { return false; }
+
+                if (OSDParser.Deserialize(data) is OSDMap result)
+                {
+                    if (!result["success"].AsBoolean())
+                    {
+                        Logger.Warn($"Failed to modify PBR terrain features: {result["message"].AsString()}", Client);
+                    }
+                    return result["success"].AsBoolean();
+                }
+                return false;
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                Logger.Error("Failed setting ModifyRegion", ex, Client);
+                return false;
+            }
+        }
+
+        #endregion
+
+        #region IDisposable
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (_disposed) return;
+
+            if (disposing)
+            {
+                try
+                {
+                    if (Client?.Network != null)
+                    {
+                        Client.Network.UnregisterCallback(PacketType.LayerData, LayerDataHandler);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn("Exception while disposing TerrainManager: " + ex.Message, ex, Client);
+                }
+            }
+
+            _disposed = true;
+        }
+
+        ~TerrainManager()
+        {
+            Dispose(false);
+        }
+
+        #endregion
+    }
+
+    #region EventArgs classes
+    // <summary>Provides data for LandPatchReceived</summary>
+    public class LandPatchReceivedEventArgs : EventArgs
+    {
+        /// <summary>Simulator from that sent tha data</summary>
+        public Simulator Simulator { get; }
+
+        /// <summary>Sim coordinate of the patch</summary>
+        public int X { get; }
+
+        /// <summary>Sim coordinate of the patch</summary>
+        public int Y { get; }
+
+        /// <summary>Size of tha patch</summary>
+        public int PatchSize { get; }
+
+        /// <summary>Heightmap for the patch</summary>
+        public float[] HeightMap { get; }
+
+        public LandPatchReceivedEventArgs(Simulator simulator, int x, int y, int patchSize, float[] heightMap)
+        {
+            Simulator = simulator;
+            X = x;
+            Y = y;
+            PatchSize = patchSize;
+            HeightMap = heightMap;
+        }
+    }
+    #endregion
+}
+

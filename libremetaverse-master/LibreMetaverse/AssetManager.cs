@@ -1,0 +1,2154 @@
+/*
+ * Copyright (c) 2006-2016, openmetaverse.co
+ * Copyright (c) 2019-2025, Sjofn LLC.
+ * All rights reserved.
+ *
+ * - Redistribution and use in source and binary forms, with or without 
+ *   modification, are permitted provided that the following conditions are met:
+ *
+ * - Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
+ * - Neither the name of the openmetaverse.co nor the names 
+ *   of its contributors may be used to endorse or promote products derived from
+ *   this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Threading.Tasks;
+using LibreMetaverse.Packets;
+using LibreMetaverse.Assets;
+using LibreMetaverse.Http;
+using LibreMetaverse.StructuredData;
+using LibreMetaverse.Messages.Linden;
+
+namespace LibreMetaverse
+{
+    #region Enums
+
+    public enum EstateAssetType : int
+    {
+        None = -1,
+        Covenant = 0
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public enum StatusCode
+    {
+        /// <summary>OK</summary>
+        OK = 0,
+        /// <summary>Transfer completed</summary>
+        Done = 1,
+        /// <summary></summary>
+        Skip = 2,
+        /// <summary></summary>
+        Abort = 3,
+        /// <summary>Unknown error occurred</summary>
+        Error = -1,
+        /// <summary>Equivalent to a 404 error</summary>
+        UnknownSource = -2,
+        /// <summary>Client does not have permission for that resource</summary>
+        InsufficientPermissions = -3,
+        /// <summary>Unknown status</summary>
+        Unknown = -4
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public enum ChannelType : int
+    {
+        /// <summary></summary>
+        Unknown = 0,
+        /// <summary>Unknown</summary>
+        Misc = 1,
+        /// <summary>Virtually all asset transfers use this channel</summary>
+        Asset = 2
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public enum SourceType : int
+    {
+        /// <summary></summary>
+        Unknown = 0,
+        /// <summary>Asset from the asset server</summary>
+        Asset = 2,
+        /// <summary>Inventory item</summary>
+        SimInventoryItem = 3,
+        /// <summary>Estate asset, such as an estate covenant</summary>
+        SimEstate = 4
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public enum TargetType : int
+    {
+        /// <summary></summary>
+        Unknown = 0,
+        /// <summary></summary>
+        File = 1,
+        /// <summary></summary>
+        VFile = 2
+    }
+
+    /// <summary>
+    /// When requesting image download, type of the image requested
+    /// </summary>
+    public enum ImageType : byte
+    {
+        /// <summary>Normal in-world object texture</summary>
+        Normal = 0,
+        /// <summary>Avatar texture</summary>
+        Baked = 1,
+        /// <summary>Server baked avatar texture</summary>
+        ServerBaked = 2
+    }
+
+    /// <summary>
+    /// Image file format
+    /// </summary>
+    public enum ImageCodec : byte
+    {
+        Invalid = 0,
+        RGB = 1,
+        J2C = 2,
+        BMP = 3,
+        TGA = 4,
+        JPEG = 5,
+        DXT = 6,
+        PNG = 7
+    }
+
+    public enum TransferError : int
+    {
+        None = 0,
+        Failed = -1,
+        AssetNotFound = -3,
+        AssetNotFoundInDatabase = -4,
+        InsufficientPermissions = -5,
+        EOF = -39,
+        CannotOpenFile = -42,
+        FileNotFound = -43,
+        FileIsEmpty = -44,
+        TCPTimeout = -23016,
+        CircuitGone = -23017
+    }
+
+    #endregion Enums
+
+    #region Transfer Classes
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public class Transfer
+    {
+        public UUID ID;
+        public int Size;
+        public byte[] AssetData;
+        public int Transferred;
+        public bool Success;
+        public AssetType AssetType;
+
+        private int transferStart;
+
+        /// <summary>Number of milliseconds passed since the last transfer
+        /// packet was received</summary>
+        public int TimeSinceLastPacket
+        {
+            get => Environment.TickCount - transferStart;
+            internal set => transferStart = Environment.TickCount + value;
+        }
+
+        public Transfer()
+        {
+            AssetData = Utils.EmptyBytes;
+            transferStart = Environment.TickCount;
+        }
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public class AssetDownload : Transfer
+    {
+        public UUID AssetID;
+        public ChannelType Channel;
+        public SourceType Source;
+        public TargetType Target;
+        public StatusCode Status;
+        public float Priority;
+        public Simulator? Simulator;
+        internal AssetManager.AssetReceivedCallback? Callback;
+
+        public int nextPacket;
+        public ConcurrentDictionary<int, byte[]> outOfOrderPackets;
+        internal TaskCompletionSource<bool> HeaderReceivedTcs;
+
+        public AssetDownload()
+        {
+            nextPacket = 0;
+            outOfOrderPackets = new ConcurrentDictionary<int, byte[]>();
+            HeaderReceivedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public class XferDownload : Transfer
+    {
+        public ulong XferID;
+        public UUID VFileID;
+        public uint PacketNum;
+        public string Filename = string.Empty;
+        public TransferError Error = TransferError.None;
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public class ImageDownload : Transfer
+    {
+        public ushort PacketCount;
+        public ImageCodec Codec;
+        public Simulator? Simulator;
+        public SortedList<ushort, ushort> PacketsSeen = new SortedList<ushort, ushort>();
+        public ImageType ImageType;
+        public int DiscardLevel;
+        public float Priority;
+        internal int InitialDataSize;
+        // Backwards compatible wait handle used by TexturePipeline
+        internal System.Threading.AutoResetEvent HeaderReceivedEvent = new System.Threading.AutoResetEvent(false);
+        // Newer async-friendly header signal
+        internal TaskCompletionSource<bool> HeaderReceivedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public class AssetUpload : Transfer
+    {
+        public UUID AssetID;
+        public AssetType Type;
+        public ulong XferID;
+        public uint PacketNum;
+        internal TaskCompletionSource<bool> ConfirmTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public class ImageRequest
+    {
+        public UUID ImageID;
+        public ImageType Type;
+        public float Priority;
+        public int DiscardLevel;
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="imageid"></param>
+        /// <param name="type"></param>
+        /// <param name="priority"></param>
+        /// <param name="discardLevel"></param>
+        public ImageRequest(UUID imageid, ImageType type, float priority, int discardLevel)
+        {
+            ImageID = imageid;
+            Type = type;
+            Priority = priority;
+            DiscardLevel = discardLevel;
+        }
+
+    }
+    #endregion Transfer Classes
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public class AssetManager
+    {
+        /// <summary>Number of milliseconds to wait for a transfer header packet if out of order data was received</summary>
+        private const int TRANSFER_HEADER_TIMEOUT = 1000 * 15;
+
+        #region Delegates
+        /// <summary>
+        /// Callback used for various asset download requests
+        /// </summary>
+        /// <param name="transfer">Transfer information</param>
+        /// <param name="asset">Downloaded asset, null on fail</param>
+        internal delegate void AssetReceivedCallback(AssetDownload transfer, Asset? asset);
+
+        #endregion Delegates
+
+        #region Events
+
+        #region XferReceived
+        /// <summary>The event subscribers. null if no subscribers</summary>
+        private EventHandler<XferReceivedEventArgs>? m_XferReceivedEvent;
+
+        /// <summary>Raises the XferReceived event</summary>
+        /// <param name="e">A XferReceivedEventArgs object containing the
+        /// data returned from the simulator</param>
+        protected virtual void OnXferReceived(XferReceivedEventArgs e)
+        {
+            EventHandler<XferReceivedEventArgs>? handler = m_XferReceivedEvent;
+            handler?.Invoke(this, e);
+        }
+
+        /// <summary>Thread sync lock object</summary>
+        private readonly object m_XferReceivedLock = new object();
+
+        /// <summary>Raised when the simulator responds sends </summary>
+        public event EventHandler<XferReceivedEventArgs> XferReceived
+        {
+            add { lock (m_XferReceivedLock) { m_XferReceivedEvent += value; } }
+            remove { lock (m_XferReceivedLock) { m_XferReceivedEvent -= value; } }
+        }
+        #endregion
+
+        #region AssetUploaded
+        /// <summary>The event subscribers. null if no subscribers</summary>
+        private EventHandler<AssetUploadEventArgs>? m_AssetUploadedEvent;
+
+        /// <summary>Raises the AssetUploaded event</summary>
+        /// <param name="e">A AssetUploadedEventArgs object containing the
+        /// data returned from the simulator</param>
+        protected virtual void OnAssetUploaded(AssetUploadEventArgs e)
+        {
+            EventHandler<AssetUploadEventArgs>? handler = m_AssetUploadedEvent;
+            handler?.Invoke(this, e);
+        }
+
+        /// <summary>Thread sync lock object</summary>
+        private readonly object m_AssetUploadedLock = new object();
+
+        /// <summary>Raised during upload completes</summary>
+        public event EventHandler<AssetUploadEventArgs> AssetUploaded
+        {
+            add { lock (m_AssetUploadedLock) { m_AssetUploadedEvent += value; } }
+            remove { lock (m_AssetUploadedLock) { m_AssetUploadedEvent -= value; } }
+        }
+        #endregion
+
+        #region UploadProgress
+        /// <summary>The event subscribers. null if no subscribers</summary>
+        private EventHandler<AssetUploadEventArgs>? m_UploadProgressEvent;
+
+        /// <summary>Raises the UploadProgress event</summary>
+        /// <param name="e">A UploadProgressEventArgs object containing the
+        /// data returned from the simulator</param>
+        protected virtual void OnUploadProgress(AssetUploadEventArgs e)
+        {
+            EventHandler<AssetUploadEventArgs>? handler = m_UploadProgressEvent;
+            handler?.Invoke(this, e);
+        }
+
+        /// <summary>Thread sync lock object</summary>
+        private readonly object m_UploadProgressLock = new object();
+
+        /// <summary>Raised during upload with progres update</summary>
+        public event EventHandler<AssetUploadEventArgs> UploadProgress
+        {
+            add { lock (m_UploadProgressLock) { m_UploadProgressEvent += value; } }
+            remove { lock (m_UploadProgressLock) { m_UploadProgressEvent -= value; } }
+        }
+        #endregion UploadProgress
+
+        #region InitiateDownload
+        /// <summary>The event subscribers. null if no subscribers</summary>
+        private EventHandler<InitiateDownloadEventArgs>? m_InitiateDownloadEvent;
+
+        /// <summary>Raises the InitiateDownload event</summary>
+        /// <param name="e">A InitiateDownloadEventArgs object containing the
+        /// data returned from the simulator</param>
+        protected virtual void OnInitiateDownload(InitiateDownloadEventArgs e)
+        {
+            EventHandler<InitiateDownloadEventArgs>? handler = m_InitiateDownloadEvent;
+            handler?.Invoke(this, e);
+        }
+
+        /// <summary>Thread sync lock object</summary>
+        private readonly object m_InitiateDownloadLock = new object();
+
+        /// <summary>Fired when the simulator sends an InitiateDownloadPacket, used to download terrain .raw files</summary>
+        public event EventHandler<InitiateDownloadEventArgs> InitiateDownload
+        {
+            add { lock (m_InitiateDownloadLock) { m_InitiateDownloadEvent += value; } }
+            remove { lock (m_InitiateDownloadLock) { m_InitiateDownloadEvent -= value; } }
+        }
+        #endregion InitiateDownload
+
+        #region ImageReceiveProgress
+        /// <summary>The event subscribers. null if no subscribers</summary>
+        private EventHandler<ImageReceiveProgressEventArgs>? m_ImageReceiveProgressEvent;
+
+        /// <summary>Raises the ImageReceiveProgress event</summary>
+        /// <param name="e">A ImageReceiveProgressEventArgs object containing the
+        /// data returned from the simulator</param>
+        protected virtual void OnImageReceiveProgress(ImageReceiveProgressEventArgs e)
+        {
+            EventHandler<ImageReceiveProgressEventArgs>? handler = m_ImageReceiveProgressEvent;
+            handler?.Invoke(this, e);
+        }
+
+        /// <summary>Thread sync lock object</summary>
+        private readonly object m_ImageReceiveProgressLock = new object();
+
+        /// <summary>Fired when a texture is in the process of being downloaded by the TexturePipeline class</summary>
+        public event EventHandler<ImageReceiveProgressEventArgs> ImageReceiveProgress
+        {
+            add { lock (m_ImageReceiveProgressLock) { m_ImageReceiveProgressEvent += value; } }
+            remove { lock (m_ImageReceiveProgressLock) { m_ImageReceiveProgressEvent -= value; } }
+        }
+        #endregion ImageReceiveProgress
+
+        #endregion Events
+
+        /// <summary>Texture download cache</summary>
+        public AssetCache Cache;
+
+        private readonly TexturePipeline Texture;
+
+        private readonly DownloadManager HttpDownloads;
+
+        /// <summary>
+        /// Expose the internal DownloadManager for Task-based downloads
+        /// </summary>
+        public DownloadManager HttpDownloadManager => HttpDownloads;
+
+        private readonly GridClient Client;
+
+        private readonly ConcurrentDictionary<UUID, Transfer> Transfers = new ConcurrentDictionary<UUID, Transfer>();
+
+        private AssetUpload? PendingUpload;
+        private readonly object PendingUploadLock = new object();
+
+        /// <summary>
+        /// Default constructor
+        /// </summary>
+        /// <param name="client">A reference to the GridClient object</param>
+        public AssetManager(GridClient client)
+        {
+            Client = client ?? throw new ArgumentNullException(nameof(client));
+            Cache = new AssetCache(client);
+            Texture = new TexturePipeline(client);
+            HttpDownloads = new DownloadManager(client);
+
+            // Transfer packets for downloading large assets
+            Client.Network.RegisterCallback(PacketType.TransferInfo, TransferInfoHandler);
+            Client.Network.RegisterCallback(PacketType.TransferPacket, TransferPacketHandler);
+
+            // Xfer packets for uploading large assets
+            Client.Network.RegisterCallback(PacketType.RequestXfer, RequestXferHandler);
+            Client.Network.RegisterCallback(PacketType.ConfirmXferPacket, ConfirmXferPacketHandler);
+            Client.Network.RegisterCallback(PacketType.AssetUploadComplete, AssetUploadCompleteHandler);
+
+            // Xfer packets for downloading misc assets
+            Client.Network.RegisterCallback(PacketType.SendXferPacket, SendXferPacketHandler);
+            Client.Network.RegisterCallback(PacketType.AbortXfer, AbortXferHandler);
+
+            // Simulator is responding to a request to download a file
+            Client.Network.RegisterCallback(PacketType.InitiateDownload, InitiateDownloadPacketHandler);
+
+        }
+
+        // TODO: Probably somewhere else is a more useful place to keep this.
+        /// <summary>
+        /// Returns type name as string for a given AssetType
+        /// </summary>
+        /// <param name="assetType"></param>
+        /// <returns>Type name</returns>
+        public string AssetTypeToString(AssetType assetType)
+        {
+            switch(assetType) {
+                case AssetType.Texture:
+                    return "texture";
+                case AssetType.Sound:
+                    return "sound";
+                case AssetType.CallingCard:
+                    return "callcard";
+                case AssetType.Landmark:
+                    return "landmark";
+#pragma warning disable 618
+                case AssetType.Script:
+                    return "script";
+#pragma warning restore 618
+                case AssetType.Clothing:
+                    return "clothing";
+                case AssetType.Object:
+                    return "object";
+                case AssetType.Notecard:
+                    return "notecard";
+                case AssetType.Folder:
+                    return "category";
+                case AssetType.LSLText:
+                    return "lsltext";
+                case AssetType.LSLBytecode:
+                    return "lslbyte";
+                case AssetType.TextureTGA:
+                    return "txtr_tga";
+                case AssetType.Bodypart:
+                    return "bodypart";
+                case AssetType.SoundWAV:
+                    return "snd_wav";
+                case AssetType.ImageTGA:
+                    return "img_tga";
+                case AssetType.ImageJPEG:
+                    return "jpeg";
+                case AssetType.Animation:
+                    return "animatn";
+                case AssetType.Gesture:
+                    return "gesture";
+                case AssetType.Simstate:
+                    return "simstate";
+                case AssetType.Link:
+                    return "link";
+                case AssetType.LinkFolder:
+                    return "link_f";
+                case AssetType.Mesh:
+                    return "mesh";
+                case AssetType.Widget:
+                    return "widget";
+                case AssetType.Person:
+                    return "person";
+                case AssetType.Unknown:
+                default:
+                    return "invalid";
+            }
+        }
+
+        /// <summary>
+        /// Build uri for requesting an asset from ViewerAsset capability
+        /// </summary>
+        /// <param name="assetType"></param>
+        /// <param name="assetId"></param>
+        /// <returns>Request URI for an asset</returns>
+        private Uri BuildFetchRequestUri(AssetType assetType, UUID assetId)
+        {
+            var cap = Client.Network.CurrentSim?.Caps?.CapabilityURI("ViewerAsset");
+            if (cap == null) throw new InvalidOperationException("ViewerAsset capability not available");
+            return new Uri($"{cap}?{AssetTypeToString(assetType)}_id={assetId}");
+        }
+
+        /// <summary>Request an asset download.</summary>
+        public Task<Asset?> RequestAssetAsync(UUID assetID, AssetType type, bool priority, CancellationToken cancellationToken = default)
+            => RequestAssetAsync(assetID, type, priority, SourceType.Asset, cancellationToken);
+
+        /// <summary>Request an asset download.</summary>
+        public Task<Asset?> RequestAssetAsync(UUID assetID, AssetType type, bool priority, SourceType sourceType, CancellationToken cancellationToken = default)
+            => RequestAssetAsync(assetID, UUID.Zero, UUID.Zero, type, priority, sourceType, UUID.Random(), cancellationToken);
+
+        /// <summary>Request an asset download.</summary>
+        public Task<Asset?> RequestAssetAsync(UUID assetID, UUID itemID, UUID taskID, AssetType assetType, bool priority,
+            SourceType sourceType, UUID transactionID, CancellationToken cancellationToken = default)
+        {
+            var tcs = new TaskCompletionSource<Asset?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken));
+            RequestAsset(assetID, itemID, taskID, assetType, priority, sourceType, transactionID,
+                (transfer, asset) => { if (transfer.Success) tcs.TrySetResult(asset); else tcs.TrySetResult(null); });
+            return tcs.Task;
+        }
+
+        private void RequestAsset(UUID assetID, UUID itemID, UUID taskID, AssetType assetType, bool priority,
+            SourceType sourceType, UUID transactionID, AssetReceivedCallback callback)
+        {
+                AssetDownload transfer = new AssetDownload
+            {
+                ID = transactionID,
+                AssetID = assetID,
+                AssetType = assetType,
+                Priority = 100.0f + (priority ? 1.0f : 0.0f),
+                Channel = ChannelType.Asset,
+                    Source = sourceType,
+                    Simulator = Client.Network.CurrentSim!,
+                Callback = callback
+            };
+
+            // Check asset cache first
+            if (callback != null && Cache.HasAsset(assetID))
+            {
+                if (Cache.TryGetCachedAssetBytes(assetID, out var data) && data != null)
+                {
+                    transfer.AssetData = data;
+                    transfer.Success = true;
+                    transfer.Status = StatusCode.OK;
+
+                    Asset asset = CreateAssetWrapper(assetType);
+                    asset.AssetData = data;
+                    asset.AssetID = assetID;
+
+                    try { callback(transfer, asset); }
+                    catch (Exception e) { Logger.Error(e.Message, e, Client); }
+
+                    return;
+                }
+
+                // cache entry exists but could not be read; treat as cache miss and fall through to network fetch
+                Logger.Warn($"Asset cache entry exists for {assetID} but reading failed; fetching from server", Client);
+            }
+
+            // If ViewerAsset capability exists and asset is directly fetchable, use that,
+            // if not, fallback to UDP (which is obsoleted on Second Life.)
+            if (CanFetchAsset(assetType) && Client.Network.CurrentSim?.Caps?.CapabilityURI("ViewerAsset") != null)
+            {
+                _ = RequestAssetHTTP(assetID, transfer, callback);
+            }
+            else
+            {
+                RequestAssetUDP(assetID, itemID, taskID, transfer, callback);
+            }
+
+        }
+
+        /// <summary>
+        /// Request an asset download via HTTP
+        /// </summary>
+        /// <param name="assetID"></param>
+        /// <param name="transfer"></param>
+        /// <param name="callback"></param>
+        /// <param name="cancellationToken">Cancellation token for the request</param>
+        private async Task RequestAssetHTTP(UUID assetID, AssetDownload transfer, AssetReceivedCallback? callback, CancellationToken cancellationToken = default)
+        {
+            var req = new DownloadRequest(
+                BuildFetchRequestUri(transfer.AssetType, assetID),
+                string.Empty,
+                null
+            ) { CancellationToken = cancellationToken };
+
+            try
+            {
+                var (response, responseData) = await HttpDownloads.QueueDownloadAsync(req).ConfigureAwait(false);
+
+                if (response != null && response.IsSuccessStatusCode && responseData != null)
+                {
+                    await Client.Assets.Cache.SaveAssetToCacheAsync(assetID, responseData, cancellationToken).ConfigureAwait(false);
+
+                    if (callback != null)
+                    {
+                        transfer.AssetData = responseData;
+                        transfer.Success = true;
+                        transfer.Status = StatusCode.OK;
+
+                        Asset asset = CreateAssetWrapper(transfer.AssetType);
+                        asset.AssetData = responseData;
+                        asset.AssetID = assetID;
+                        callback(transfer, asset);
+                    }
+                }
+                else
+                {
+                    Logger.Warn($"Failed to fetch asset {assetID}: ", Client);
+                    if (callback != null)
+                    {
+                        transfer.Success = false;
+                        transfer.Status = StatusCode.Error;
+                        callback(transfer, null);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Failed to fetch asset {assetID}: {ex}", Client);
+                if (callback != null)
+                {
+                    transfer.Success = false;
+                    transfer.Status = StatusCode.Error;
+                    callback(transfer, null);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Request an asset download via LLUDP
+        /// </summary>
+        /// <param name="assetID">Asset UUID</param>
+        /// <param name="taskID">task ID</param>
+        /// <param name="transfer"></param>
+        /// <param name="callback">The callback to fire when the simulator responds with the asset data</param>
+        /// <param name="itemID">Item ID</param>
+        /// <param name="cancellationToken">Cancellation token for the request</param>
+        private void RequestAssetUDP(UUID assetID, UUID itemID, UUID taskID, 
+            AssetDownload transfer, AssetReceivedCallback? callback, CancellationToken cancellationToken = default)
+        {
+
+            // Add this transfer to the dictionary
+            Transfers[transfer.ID] = transfer;
+
+            // Register cancellation to abort and cleanup the UDP transfer
+            if (cancellationToken.CanBeCanceled)
+            {
+                try
+                {
+                    cancellationToken.Register(() =>
+                    {
+                        try
+                        {
+                            // Send abort
+                            var abort = new TransferAbortPacket
+                            {
+                                TransferInfo =
+                                {
+                                    ChannelType = (int)transfer.Channel,
+                                    TransferID = transfer.ID
+                                }
+                            };
+                            Client.Network.SendPacket(abort, transfer.Simulator);
+                        }
+                        catch { }
+
+                        // Cleanup the transfer
+                        Transfers.TryRemove(transfer.ID, out _);
+
+                        // Wake any waiters on the transfer header so they can abort promptly
+                        try { transfer.HeaderReceivedTcs?.TrySetCanceled(); } catch { }
+                    });
+                }
+                catch { }
+            }
+
+            // Build the request packet and send it
+            TransferRequestPacket request = new TransferRequestPacket
+            {
+                TransferInfo =
+                {
+                    ChannelType = (int) transfer.Channel,
+                    Priority = transfer.Priority,
+                    SourceType = (int) transfer.Source,
+                    TransferID = transfer.ID
+                }
+            };
+
+            byte[] paramField = taskID == UUID.Zero ? new byte[20] : new byte[96];
+            Buffer.BlockCopy(assetID.GetBytes(), 0, paramField, 0, 16);
+            Buffer.BlockCopy(Utils.IntToBytes((int)transfer.AssetType), 0, paramField, 16, 4);
+
+            if (taskID != UUID.Zero)
+            {
+                Buffer.BlockCopy(taskID.GetBytes(), 0, paramField, 48, 16);
+                Buffer.BlockCopy(itemID.GetBytes(), 0, paramField, 64, 16);
+                Buffer.BlockCopy(assetID.GetBytes(), 0, paramField, 80, 16);
+            }
+            request.TransferInfo.Params = paramField;
+
+            Client.Network.SendPacket(request, transfer.Simulator);
+        }
+
+        /// <summary>
+        /// Request an asset download through the almost deprecated Xfer system
+        /// </summary>
+        /// <param name="filename">Filename of the asset to request</param>
+        /// <param name="deleteOnCompletion">Delete the asset
+        /// off the server after it is retrieved</param>
+        /// <param name="useBigPackets">Use large transfer packets or not</param>
+        /// <param name="vFileID">UUID of the file to request, if filename is
+        /// left empty</param>
+        /// <param name="vFileType">Asset type of <paramref name="vFileID"/>, or
+        /// <see cref="AssetType.Unknown" /> if filename is not empty</param>
+        /// <param name="fromCache">Sets the FilePath in the request to Cache
+        /// (4) if true, otherwise Unknown (0) is used</param>
+        /// <returns></returns>
+        public ulong RequestAssetXfer(string filename, bool deleteOnCompletion, bool useBigPackets, UUID vFileID, AssetType vFileType,
+            bool fromCache)
+        {
+            UUID uuid = UUID.Random();
+            ulong id = uuid.GetULong();
+
+            XferDownload transfer = new XferDownload
+            {
+                XferID = id,
+                ID = new UUID(id),
+                Filename = filename,
+                VFileID = vFileID,
+                AssetType = vFileType
+            };
+            // Our dictionary tracks transfers with UUIDs, so convert the ulong back
+
+            // Add this transfer to the dictionary
+            Transfers[transfer.ID] = transfer;
+
+            RequestXferPacket request = new RequestXferPacket
+            {
+                XferID =
+                {
+                    ID = id,
+                    Filename = Utils.StringToBytes(filename),
+                    FilePath = fromCache ? (byte) 4 : (byte) 0,
+                    DeleteOnCompletion = deleteOnCompletion,
+                    UseBigPackets = useBigPackets,
+                    VFileID = vFileID,
+                    VFileType = (short) vFileType
+                }
+            };
+
+            Client.Network.SendPacket(request);
+
+            return id;
+        }
+
+        private void RequestInventoryAsset(UUID assetID, UUID itemID, UUID taskID, UUID ownerID, AssetType assetType,
+            bool priority, UUID transferID, AssetReceivedCallback callback)
+        {
+                AssetDownload transfer = new AssetDownload
+            {
+                ID = transferID,
+                AssetID = assetID,
+                AssetType = assetType,
+                Priority = 100.0f + (priority ? 1.0f : 0.0f),
+                Channel = ChannelType.Asset,
+                    Source = SourceType.SimInventoryItem,
+                    Simulator = Client.Network.CurrentSim!,
+                Callback = callback
+            };
+
+            // Check asset cache first
+            if (callback != null && Cache.HasAsset(assetID))
+            {
+                if (Cache.TryGetCachedAssetBytes(assetID, out var data) && data != null)
+                {
+                    transfer.AssetData = data;
+                    transfer.Success = true;
+                    transfer.Status = StatusCode.OK;
+
+                    Asset asset = CreateAssetWrapper(assetType);
+                    asset.AssetData = data;
+                    asset.AssetID = assetID;
+
+                    try { callback(transfer, asset); }
+                    catch (Exception e) { Logger.Error(e.Message, e, Client); }
+
+                    return;
+                }
+
+                // cache entry exists but could not be read; treat as cache miss and fall through to network fetch
+                Logger.Warn($"Asset cache entry exists for {assetID} but reading failed; fetching from server", Client);
+            }
+            
+            // If ViewerAsset capability exists, use that, if not, fallback to UDP
+            if (CanFetchAsset(assetType) && Client.Network.CurrentSim?.Caps?.CapabilityURI("ViewerAsset") != null)
+            {
+                _ = RequestInventoryAssetHTTP(assetID, transfer, callback);
+            }
+            else
+            {
+                RequestInventoryAssetUDP(assetID, itemID, taskID, ownerID, transfer, callback);
+            }
+
+            
+        }
+
+        /// <summary>
+        /// Request Inventory Asset via HTTP
+        /// </summary>
+        /// <param name="assetID">Use UUID.Zero if you do not have the 
+        /// asset ID but have all the necessary permissions</param>
+        /// <param name="transfer"></param>
+        /// <param name="callback"></param>
+        private async Task RequestInventoryAssetHTTP(UUID assetID, AssetDownload transfer, AssetReceivedCallback? callback)
+        {
+            var req = new DownloadRequest(BuildFetchRequestUri(transfer.AssetType, assetID), string.Empty, null);
+            try
+            {
+                var (response, responseData) = await HttpDownloads.QueueDownloadAsync(req).ConfigureAwait(false);
+
+                if (response != null && response.IsSuccessStatusCode && responseData != null)
+                {
+                    await Client.Assets.Cache.SaveAssetToCacheAsync(assetID, responseData).ConfigureAwait(false);
+
+                    if (callback != null)
+                    {
+                        transfer.AssetData = responseData;
+                        transfer.Success = true;
+                        transfer.Status = StatusCode.OK;
+
+                        Asset asset = CreateAssetWrapper(transfer.AssetType);
+                        asset.AssetData = responseData;
+                        asset.AssetID = assetID;
+                        callback(transfer, asset);
+                    }
+                }
+                else
+                {
+                    Logger.Warn($"Failed to fetch asset {assetID}", Client);
+                    if (callback != null)
+                    {
+                        transfer.Success = false;
+                        transfer.Status = StatusCode.Error;
+                        callback(transfer, null);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Failed to fetch asset {assetID}: {ex}", Client);
+                if (callback != null)
+                {
+                    transfer.Success = false;
+                    transfer.Status = StatusCode.Error;
+                    callback(transfer, null);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Request Inventory Asset from UDP
+        /// </summary>
+        /// <param name="assetID">Use UUID.Zero if you do not have the 
+        /// asset ID but have all the necessary permissions</param>
+        /// <param name="itemID">The item ID of this asset in the inventory</param>
+        /// <param name="taskID">Use UUID.Zero if you are not requesting an 
+        /// asset from an object inventory</param>
+        /// <param name="ownerID">The owner of this asset</param>
+        /// <param name="transfer"></param>
+        /// <param name="callback"></param>
+        private void RequestInventoryAssetUDP(UUID assetID, UUID itemID, UUID taskID, UUID ownerID, AssetDownload transfer, AssetReceivedCallback? callback)
+        {
+            // Add this transfer to the dictionary
+            Transfers[transfer.ID] = transfer;
+
+            // Build the request packet and send it
+            TransferRequestPacket request = new TransferRequestPacket
+            {
+                TransferInfo =
+                {
+                    ChannelType = (int) transfer.Channel,
+                    Priority = transfer.Priority,
+                    SourceType = (int) transfer.Source,
+                    TransferID = transfer.ID
+                }
+            };
+
+            byte[] paramField = new byte[100];
+            Buffer.BlockCopy(Client.Self.AgentID.GetBytes(), 0, paramField, 0, 16);
+            Buffer.BlockCopy(Client.Self.SessionID.GetBytes(), 0, paramField, 16, 16);
+            Buffer.BlockCopy(ownerID.GetBytes(), 0, paramField, 32, 16);
+            Buffer.BlockCopy(taskID.GetBytes(), 0, paramField, 48, 16);
+            Buffer.BlockCopy(itemID.GetBytes(), 0, paramField, 64, 16);
+            Buffer.BlockCopy(assetID.GetBytes(), 0, paramField, 80, 16);
+            Buffer.BlockCopy(Utils.IntToBytes((int)transfer.AssetType), 0, paramField, 96, 4);
+            request.TransferInfo.Params = paramField;
+
+            Client.Network.SendPacket(request, transfer.Simulator);
+        }
+
+        public Task<Asset?> RequestInventoryAssetAsync(InventoryItem item, bool priority, UUID transferID, CancellationToken cancellationToken = default)
+            => RequestInventoryAssetAsync(item.AssetUUID, item.UUID, UUID.Zero, item.OwnerID, item.AssetType, priority, transferID, cancellationToken);
+
+        public Task<Asset?> RequestInventoryAssetAsync(UUID assetID, UUID itemID, UUID taskID, UUID ownerID, AssetType assetType,
+            bool priority, UUID transferID, CancellationToken cancellationToken = default)
+        {
+            var tcs = new TaskCompletionSource<Asset?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken));
+            RequestInventoryAsset(assetID, itemID, taskID, ownerID, assetType, priority, transferID,
+                (transfer, asset) => { if (transfer.Success) tcs.TrySetResult(asset); else tcs.TrySetResult(null); });
+            return tcs.Task;
+        }
+
+        public void RequestEstateAsset(AssetDownload transfer, EstateAssetType eat)
+        {
+            // Add this transfer to the dictionary
+            Transfers[transfer.ID] = transfer;
+            
+            // Build the request packet and send it
+            var request = new TransferRequestPacket
+            {
+                TransferInfo =
+                {
+                    ChannelType = (int) transfer.Channel,
+                    Priority = transfer.Priority,
+                    SourceType = (int) transfer.Source,
+                    TransferID = transfer.ID
+                }
+            };
+            
+            var paramField = new byte[36];
+            Buffer.BlockCopy(Client.Self.AgentID.GetBytes(), 0, paramField, 0, 16);
+            Buffer.BlockCopy(Client.Self.SessionID.GetBytes(), 0, paramField, 16, 16);
+            Buffer.BlockCopy(Utils.IntToBytes((int)eat), 0, paramField, 32, 4);
+            request.TransferInfo.Params = paramField;
+
+            Client.Network.SendPacket(request, transfer.Simulator);
+        }
+
+#region Uploads
+        /// <summary>
+        /// Used to force asset data into the PendingUpload property, ie: for raw terrain uploads
+        /// </summary>
+        /// <param name="assetData">An AssetUpload object containing the data to upload to the simulator</param>
+        internal void SetPendingAssetUploadData(AssetUpload assetData)
+        {
+            lock (PendingUploadLock)
+                PendingUpload = assetData;
+        }
+
+        /// <summary>
+        /// Initiate an asset upload
+        /// </summary>
+        /// <param name="assetID">The ID this asset will have if the
+        /// upload succeeds</param>
+        /// <param name="type">Asset type to upload this data as</param>
+        /// <param name="data">Raw asset data to upload</param>
+        /// <param name="storeLocal">Whether to store this asset on the local
+        /// simulator or the grid-wide asset server</param>
+        /// <param name="transactionID">The tranaction id for the upload <see cref="RequestCreateItem"/></param>
+        /// <returns>The transaction ID of this transfer</returns>
+        public UUID RequestUpload(out UUID assetID, AssetType type, byte[] data, bool storeLocal, UUID transactionID)
+        {
+            // compute assetID first and call async implementation synchronously for backward compatibility
+            assetID = UUID.Combine(transactionID, Client.Self.SecureSessionID);
+            return RequestUploadAsync(type, data, storeLocal, transactionID).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Async implementation of RequestUpload. Returns the transaction UUID when confirmed or throws on timeout/cancellation.
+        /// </summary>
+        public async Task<UUID> RequestUploadAsync(AssetType type, byte[] data, bool storeLocal, UUID transactionID, CancellationToken cancellationToken = default)
+        {
+            AssetUpload upload = new AssetUpload
+            {
+                AssetData = data,
+                AssetType = type
+            };
+            var assetID_local = UUID.Combine(transactionID, Client.Self.SecureSessionID);
+            upload.AssetID = assetID_local;
+            upload.Size = data.Length;
+            upload.XferID = 0;
+            upload.ID = transactionID;
+
+            // Build and send the upload packet
+            AssetUploadRequestPacket request = new AssetUploadRequestPacket
+            {
+                AssetBlock =
+                {
+                    StoreLocal = storeLocal,
+                    Tempfile = false, // This field is deprecated
+                    TransactionID = transactionID,
+                    Type = (sbyte)type
+                }
+            };
+
+            if (data.Length + 100 < Settings.MaxPacketSize)
+            {
+                Logger.Info(
+                    $"Beginning asset upload [Single Packet], ID: {upload.ID.ToString()}, AssetID: {upload.AssetID.ToString()}, Size: {upload.Size}", Client);
+
+                Transfers[upload.ID] = upload;
+
+                // The whole asset will fit in this packet, makes things easy
+                request.AssetBlock.AssetData = data;
+                upload.Transferred = data.Length;
+            }
+            else
+            {
+                Logger.Info(
+                    $"Beginning asset upload [Multiple Packets], ID: {upload.ID.ToString()}, AssetID: {upload.AssetID.ToString()}, Size: {upload.Size}", Client);
+
+                // Asset is too big, send in multiple packets
+                request.AssetBlock.AssetData = Utils.EmptyBytes;
+            }
+
+            const int UPLOAD_CONFIRM_TIMEOUT = 20 * 1000;
+
+            // prepare per-upload ConfirmTcs
+            upload.ConfirmTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            lock (PendingUploadLock)
+            {
+                PendingUpload = upload;
+                Client.Network.SendPacket(request);
+            }
+
+            var confirmTask = upload.ConfirmTcs.Task;
+            var timeoutTask = Task.Delay(UPLOAD_CONFIRM_TIMEOUT, cancellationToken);
+            var cancelTask = cancellationToken.CanBeCanceled ? Task.Run(() => { cancellationToken.WaitHandle.WaitOne(); }, cancellationToken) : null;
+
+            var finished = await Task.WhenAny(new[] { confirmTask, timeoutTask, cancelTask ?? Task.Delay(-1, cancellationToken) }).ConfigureAwait(false);
+
+            if (finished == confirmTask)
+            {
+                // propagate exceptions/cancellation if any
+                await confirmTask.ConfigureAwait(false);
+                return upload.ID;
+            }
+
+            // cleanup
+            lock (PendingUploadLock)
+            {
+                if (PendingUpload == upload) PendingUpload = null;
+            }
+
+            if (finished == cancelTask)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+
+            throw new TimeoutException("Timeout waiting for previous asset upload to begin");
+        }
+
+        /// <summary>
+        /// Returns the upload cost in L$ for a texture of the specified width, selecting the
+        /// correct large-texture pricing tier from <see cref="AgentManager.Benefits"/> when
+        /// available, and falling back to <see cref="Settings.UploadCost"/> otherwise.
+        /// </summary>
+        /// <param name="widthPixels">Texture width in pixels (e.g. 512, 1024, 2048, 4096)</param>
+        /// <returns>Upload cost in L$</returns>
+        public int GetTextureUploadCost(int widthPixels)
+        {
+            if (widthPixels > 1024)
+            {
+                var largeCosts = Client.Self.Benefits?.LargeTextureUploadCost;
+                if (largeCosts != null && largeCosts.Count > 0)
+                {
+                    int tier = 0;
+                    int w = widthPixels;
+                    while (w > 2048 && tier < largeCosts.Count - 1)
+                    {
+                        w /= 2;
+                        tier++;
+                    }
+                    return largeCosts[tier];
+                }
+            }
+            return Client.Settings.UploadCost;
+        }
+
+        /// <summary>
+        /// Uploads a texture asset, automatically selecting and paying the correct tiered
+        /// upload fee for large textures using <see cref="AgentManager.Benefits"/>.
+        /// Textures wider than 1024 pixels are charged at the appropriate large-texture tier;
+        /// smaller textures are charged at the standard <see cref="Settings.UploadCost"/>.
+        /// </summary>
+        /// <param name="data">Raw texture asset data</param>
+        /// <param name="widthPixels">Texture width in pixels; determines the upload cost tier</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Transaction UUID of the completed upload</returns>
+        public async Task<UUID> RequestUploadLargeTextureAsync(byte[] data, int widthPixels,
+            CancellationToken cancellationToken = default)
+        {
+            Client.Self.PayUploadFee(GetTextureUploadCost(widthPixels));
+            return await RequestUploadAsync(AssetType.Texture, data, false, UUID.Random(), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        public async Task<UUID> RequestUploadBakedTextureAsync(byte[] textureData, CancellationToken cancellationToken = default)
+        {
+            Uri? cap = Client.Network.CurrentSim?.Caps?.CapabilityURI("UploadBakedTexture");
+            if (cap != null)
+            {
+                try
+                {
+                    var (response, data) = await Client.HttpCapsClient.PostAsync(cap, OSDFormat.Xml, new OSD(), cancellationToken).ConfigureAwait(false);
+                    if (response == null || data == null)
+                    {
+                        Logger.Warn("Bake upload failed during uploader retrieval", Client);
+                        return UUID.Zero;
+                    }
+
+                    OSD result = OSDParser.Deserialize(data);
+                    if (result is OSDMap resultMap)
+                    {
+                        UploadBakedTextureMessage message = new UploadBakedTextureMessage();
+                        message.Deserialize(resultMap);
+
+                        if (message.Request.State == "upload")
+                        {
+                            Uri uploadUrl = ((UploaderRequestUpload)message.Request).Url;
+                            if (uploadUrl != null)
+                            {
+                                try
+                                {
+                                    var (resp2, respData2) = await Client.HttpCapsClient.PostAsync(uploadUrl, "application/octet-stream", textureData, cancellationToken).ConfigureAwait(false);
+                                    if (resp2 == null || respData2 == null)
+                                    {
+                                        Logger.Warn("Bake upload failed during asset upload", Client);
+                                        return UUID.Zero;
+                                    }
+
+                                    OSD d = OSDParser.Deserialize(respData2);
+                                    if (d is OSDMap map)
+                                    {
+                                        UploadBakedTextureMessage message2 = new UploadBakedTextureMessage();
+                                        message2.Deserialize(map);
+                                        if (message2.Request.State == "complete")
+                                            return ((UploaderRequestComplete)message2.Request).AssetID;
+                                    }
+
+                                    Logger.Warn("Bake upload failed during asset upload", Client);
+                                    return UUID.Zero;
+                                }
+                                catch (Exception ex)
+                                {
+                                    Logger.Warn("Bake upload failed during asset upload", ex, Client);
+                                    return UUID.Zero;
+                                }
+                            }
+                        }
+                    }
+
+                    Logger.Warn("Bake upload failed during uploader retrieval", Client);
+                    return UUID.Zero;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn("Bake upload failed during uploader retrieval", ex, Client);
+                    return UUID.Zero;
+                }
+            }
+
+            // UDP fallback
+            Logger.Info("UploadBakedTexture not available, falling back to UDP method", Client);
+            UUID transactionID = UUID.Random();
+            var tcs = new TaskCompletionSource<UUID>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            void UdpCallback(object? sender, AssetUploadEventArgs e)
+            {
+                if (e.Upload.ID != transactionID) return;
+                AssetUploaded -= UdpCallback;
+                tcs.TrySetResult(e.Upload.Success ? e.Upload.AssetID : UUID.Zero);
+            }
+
+            AssetUploaded += UdpCallback;
+            try
+            {
+                RequestUpload(out _, AssetType.Texture, textureData, true, transactionID);
+                using (cancellationToken.Register(() => { AssetUploaded -= UdpCallback; tcs.TrySetCanceled(cancellationToken); }))
+                    return await tcs.Task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { AssetUploaded -= UdpCallback; return UUID.Zero; }
+            catch (Exception) { AssetUploaded -= UdpCallback; return UUID.Zero; }
+        }
+
+#endregion Uploads
+
+        /// <summary>
+        /// Requests download of a mesh asset
+        /// </summary>
+        /// <param name="meshID">UUID of the mesh asset</param>
+        /// <param name="cancellationToken">Cancellation token for the request</param>
+        /// <returns>The mesh asset, or null on failure</returns>
+        public async Task<AssetMesh?> RequestMeshAsync(UUID meshID, CancellationToken cancellationToken = default)
+        {
+            if (meshID == UUID.Zero)
+                return null;
+
+            if (Client.Network.CurrentSim?.Caps?.GetMeshCapURI() != null)
+            {
+                if (Client.Assets.Cache.HasAsset(meshID))
+                {
+                    if (Client.Assets.Cache.TryGetCachedAssetBytes(meshID, out var meshBytes) && meshBytes != null)
+                        return new AssetMesh(meshID, meshBytes);
+                    Logger.Warn($"Mesh cache entry exists for {meshID} but reading failed; fetching from server", Client);
+                }
+
+                var req = new DownloadRequest(new Uri($"{Client.Network.CurrentSim.Caps.GetMeshCapURI()}?mesh_id={meshID}"), string.Empty, null)
+                {
+                    CancellationToken = cancellationToken
+                };
+
+                try
+                {
+                    var (response, responseData) = await HttpDownloads.QueueDownloadAsync(req).ConfigureAwait(false);
+                    if (response != null && response.IsSuccessStatusCode && responseData != null)
+                    {
+                        await Client.Assets.Cache.SaveAssetToCacheAsync(meshID, responseData, cancellationToken);
+                        return new AssetMesh(meshID, responseData);
+                    }
+                    Logger.Warn($"Failed to fetch mesh asset {meshID}", Client);
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"Failed to fetch mesh asset {meshID}: {ex}", Client);
+                    return null;
+                }
+            }
+
+            Logger.Debug("Mesh fetch capabilities not available", Client);
+            return null;
+        }
+
+#region Texture Downloads
+
+        private void RequestImageInternal(UUID textureID, ImageType imageType, float priority, int discardLevel,
+            uint packetStart, TextureDownloadCallback callback, bool progress)
+        {
+            if (Client.Settings.TexturePipeline.UseHttpTextures
+                && Client.Network.CurrentSim?.Caps?.GetTextureCapURI() != null)
+            {
+                _ = HttpRequestTexture(textureID, imageType, priority, discardLevel, packetStart, callback, progress);
+            }
+            else
+            {
+                Texture.RequestTexture(textureID, imageType, priority, discardLevel, packetStart, callback, progress);
+            }
+        }
+
+        /// <summary>
+        /// Request a texture asset download.
+        /// </summary>
+        /// <param name="textureID">UUID of the texture to download</param>
+        /// <param name="imageType">Normal for most textures, Baked for baked layer textures</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>The texture asset on success, null on failure or timeout</returns>
+        public Task<AssetTexture?> RequestImageAsync(UUID textureID, ImageType imageType = ImageType.Normal, CancellationToken cancellationToken = default)
+        {
+            var tcs = new TaskCompletionSource<AssetTexture?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            cancellationToken.Register(() => { Texture.AbortTextureRequest(textureID); tcs.TrySetCanceled(cancellationToken); });
+            RequestImageInternal(textureID, imageType, 101300.0f, 0, 0, (state, texture) =>
+            {
+                switch (state)
+                {
+                    case TextureRequestState.Finished:
+                        tcs.TrySetResult(texture);
+                        break;
+                    case TextureRequestState.Timeout:
+                    case TextureRequestState.NotFound:
+                    case TextureRequestState.Aborted:
+                        tcs.TrySetResult(null);
+                        break;
+                }
+            }, false);
+            return tcs.Task;
+        }
+
+        /// <summary>
+        /// Cancel a texture request
+        /// </summary>
+        /// <param name="textureID">The texture assets <see cref="UUID"/></param>
+        public void RequestImageCancel(UUID textureID)
+        {
+            Texture.AbortTextureRequest(textureID);
+        }
+
+        /// <summary>
+        /// Fetch an avatar texture from a grid that supports server-side baking.
+        /// </summary>
+        /// <param name="avatarID">ID of the avatar</param>
+        /// <param name="textureID">ID of the texture</param>
+        /// <param name="bakeName">Name of the part of the avatar texture applies to</param>
+        /// <param name="cancellationToken">Cancellation token for the request</param>
+        /// <returns>The texture asset on success, null on failure</returns>
+        public async Task<AssetTexture?> RequestServerBakedImageAsync(UUID avatarID, UUID textureID, string bakeName, CancellationToken cancellationToken = default)
+        {
+            if (avatarID == UUID.Zero || textureID == UUID.Zero)
+                return null;
+
+            if (string.IsNullOrEmpty(Client.Network.AgentAppearanceServiceURL))
+                return null;
+
+            if (Client.Assets.Cache.HasAsset(textureID) && Client.Assets.Cache.TryGetCachedAssetBytes(textureID, out var assetData) && assetData != null)
+                return new AssetTexture(textureID, assetData);
+
+            Uri url = new Uri($"{Client.Network.AgentAppearanceServiceURL}texture/{avatarID}/{bakeName}/{textureID}");
+            var req = new DownloadRequest(url, "image/x-j2c", null) { CancellationToken = cancellationToken };
+
+            try
+            {
+                var (response, responseData) = await HttpDownloads.QueueDownloadAsync(req).ConfigureAwait(false);
+                if (response != null && response.IsSuccessStatusCode && responseData != null)
+                {
+                    await Client.Assets.Cache.SaveAssetToCacheAsync(textureID, responseData, cancellationToken);
+                    return new AssetTexture(textureID, responseData);
+                }
+                Logger.Warn($"Failed to fetch server bake {textureID}: Status={response?.StatusCode}", Client);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Failed to fetch server bake {textureID}: {ex}", Client);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Lets TexturePipeline class fire the progress event
+        /// </summary>
+        /// <param name="textureID">The texture ID currently being downloaded</param>
+        /// <param name="transferredBytes">the number of bytes transferred</param>
+        /// <param name="totalBytes">the total number of bytes expected</param>
+        internal void FireImageProgressEvent(UUID textureID, int transferredBytes, int totalBytes)
+        {
+            try { OnImageReceiveProgress(new ImageReceiveProgressEventArgs(textureID, transferredBytes, totalBytes)); }
+            catch (Exception e) { Logger.Warn(e.Message, e, Client); }
+        }
+
+        // Helper method for downloading textures via GetTexture cap
+        // Same signature as the UDP variant since we need all the params to
+        // pass to the UDP TexturePipeline in case we need to fall back to it
+        // (Linden servers currently (1.42) don't support bakes downloads via HTTP)
+        private async Task HttpRequestTexture(UUID textureID, ImageType imageType, float priority, int discardLevel,
+    uint packetStart, TextureDownloadCallback callback, bool progress)
+        {
+            if (textureID == UUID.Zero || callback == null)
+                return;
+
+            byte[] assetData;
+            // Do we have this image in the cache?
+            if (Client.Assets.Cache.HasAsset(textureID))
+            {
+                var cacheResult = await Client.Assets.Cache.TryGetCachedAssetBytesAsync(textureID).ConfigureAwait(false);
+                if (cacheResult.Success && cacheResult.Data != null)
+                {
+                    assetData = cacheResult.Data;
+                    ImageDownload image = new ImageDownload {ID = textureID, AssetData = assetData};
+                    image.Size = image.AssetData.Length;
+                    image.Transferred = image.AssetData.Length;
+                    image.ImageType = imageType;
+                    image.AssetType = AssetType.Texture;
+                    image.Success = true;
+
+                    callback(TextureRequestState.Finished, new AssetTexture(image.ID, image.AssetData));
+                    FireImageProgressEvent(image.ID, image.Transferred, image.Size);
+                    return;
+                }
+
+                Logger.Warn($"Texture cache entry exists for {textureID} but reading failed; fetching from network", Client);
+            }
+            IProgress<LibreMetaverse.HttpCapsClient.ProgressReport>? progressReporter = null;
+
+            if (progress)
+            {
+                progressReporter = new Progress<LibreMetaverse.HttpCapsClient.ProgressReport>(p =>
+                {
+                    try { FireImageProgressEvent(textureID, (int)p.BytesTransferred, (int)(p.TotalBytes ?? 0)); } catch { }
+                });
+            }
+
+            var capUri = Client.Network.CurrentSim?.Caps?.GetTextureCapURI();
+            if (capUri == null)
+            {
+                // No HTTP capability available, fall back to UDP texture request
+                Texture.RequestTexture(textureID, imageType, priority, discardLevel, packetStart, callback, progress);
+                return;
+            }
+
+            var req = new DownloadRequest(
+                 new Uri($"{capUri}?texture_id={textureID}"),
+                 "image/x-j2c",
+                 progressReporter
+            );
+
+            try
+            {
+                var (response, responseData) = await HttpDownloads.QueueDownloadAsync(req).ConfigureAwait(false);
+
+                if (response != null && response.IsSuccessStatusCode && responseData != null)
+                {
+                    ImageDownload image = new ImageDownload {ID = textureID, AssetData = responseData};
+                    image.Size = image.AssetData.Length;
+                    image.Transferred = image.AssetData.Length;
+                    image.ImageType = imageType;
+                    image.AssetType = AssetType.Texture;
+                    image.Success = true;
+
+                    callback(TextureRequestState.Finished, new AssetTexture(image.ID, image.AssetData));
+                    FireImageProgressEvent(image.ID, image.Transferred, image.Size);
+
+                    await Client.Assets.Cache.SaveAssetToCacheAsync(textureID, responseData).ConfigureAwait(false);
+                }
+                else // download failed
+                {
+                    Logger.Warn(
+                        $"Failed to fetch texture {textureID} over HTTP, falling back to UDP. Status={response?.StatusCode}", Client);
+
+                    Texture.RequestTexture(textureID, imageType, priority, discardLevel, packetStart, callback, progress);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Failed to fetch texture {textureID} over HTTP: {ex.Message}", Client);
+                Texture.RequestTexture(textureID, imageType, priority, discardLevel, packetStart, callback, progress);
+            }
+        }
+
+#endregion Texture Downloads
+
+#region Helpers
+
+        public Asset CreateAssetWrapper(AssetType type)
+        {
+            Asset asset;
+
+            switch (type)
+            {
+                case AssetType.Notecard:
+                    asset = new AssetNotecard();
+                    break;
+                case AssetType.LSLText:
+                    asset = new AssetScriptText();
+                    break;
+                case AssetType.LSLBytecode:
+                    asset = new AssetScriptBinary();
+                    break;
+                case AssetType.Texture:
+                    asset = new AssetTexture();
+                    break;
+                case AssetType.Object:
+                    asset = new AssetPrim();
+                    break;
+                case AssetType.Clothing:
+                    asset = new AssetClothing();
+                    break;
+                case AssetType.Bodypart:
+                    asset = new AssetBodypart();
+                    break;
+                case AssetType.Animation:
+                    asset = new AssetAnimation();
+                    break;
+                case AssetType.Sound:
+                    asset = new AssetSound();
+                    break;
+                case AssetType.Landmark:
+                    asset = new AssetLandmark();
+                    break;
+                case AssetType.Gesture:
+                    asset = new AssetGesture();
+                    break;
+                case AssetType.CallingCard:
+                    asset = new AssetCallingCard();
+                    break;
+                case AssetType.Settings:
+                    asset = new AssetSettings();
+                    break;
+                default:
+                    asset = new AssetMutable(type);
+                    Logger.Error("Unimplemented asset type: " + type);
+                    break;
+            }
+
+            return asset;
+        }
+
+        private Asset WrapAsset(AssetDownload download)
+        {
+            Asset asset = CreateAssetWrapper(download.AssetType);
+            asset.AssetID = download.AssetID;
+            asset.AssetData = download.AssetData;
+            return asset;
+        }
+
+        private void SendNextUploadPacket(AssetUpload upload)
+        {
+            SendXferPacketPacket send = new SendXferPacketPacket
+            {
+                XferID =
+                {
+                    ID = upload.XferID,
+                    Packet = upload.PacketNum++
+                }
+            };
+
+            if (send.XferID.Packet == 0)
+            {
+                // The first packet reserves the first four bytes of the data for the
+                // total length of the asset and appends 1000 bytes of data after that
+                send.DataPacket.Data = new byte[1004];
+                Buffer.BlockCopy(Utils.IntToBytes(upload.Size), 0, send.DataPacket.Data, 0, 4);
+                Buffer.BlockCopy(upload.AssetData, 0, send.DataPacket.Data, 4, 1000);
+                upload.Transferred += 1000;
+
+                Transfers.TryRemove(upload.AssetID, out _);
+                Transfers[upload.ID] = upload;
+            }
+            else if ((send.XferID.Packet + 1) * 1000 < upload.Size)
+            {
+                // This packet is somewhere in the middle of the transfer, or a perfectly
+                // aligned packet at the end of the transfer
+                send.DataPacket.Data = new byte[1000];
+                Buffer.BlockCopy(upload.AssetData, upload.Transferred, send.DataPacket.Data, 0, 1000);
+                upload.Transferred += 1000;
+            }
+            else
+            {
+                // Special handler for the last packet which will be less than 1000 bytes
+                int lastlen = upload.Size - ((int)send.XferID.Packet * 1000);
+                send.DataPacket.Data = new byte[lastlen];
+                Buffer.BlockCopy(upload.AssetData, (int)send.XferID.Packet * 1000, send.DataPacket.Data, 0, lastlen);
+                send.XferID.Packet |= (uint)0x80000000; // This signals the final packet
+                upload.Transferred += lastlen;
+            }
+
+            Client.Network.SendPacket(send);
+        }
+
+        private void SendConfirmXferPacket(ulong xferID, uint packetNum)
+        {
+            ConfirmXferPacketPacket confirm = new ConfirmXferPacketPacket
+            {
+                XferID =
+                {
+                    ID = xferID,
+                    Packet = packetNum
+                }
+            };
+
+            Client.Network.SendPacket(confirm);
+        }
+
+        /// <summary>
+        /// Returns whether asset type can be fetched directly from the asset server endpoint
+        /// </summary>
+        /// <param name="assetType">The asset's type</param>
+        /// <returns>Whether this type can be fetched directly</returns>
+        /// <exception cref="ArgumentOutOfRangeException"></exception>
+        private static bool CanFetchAsset(AssetType assetType)
+        {
+            switch (assetType)
+            {
+                case AssetType.Texture:
+                case AssetType.Sound:
+                case AssetType.Landmark:
+                case AssetType.Clothing:
+                case AssetType.Bodypart:
+                case AssetType.Animation:
+                case AssetType.Gesture:
+                case AssetType.Settings: 
+                case AssetType.Material:
+                    return true;
+                
+                case AssetType.Unknown:
+                case AssetType.CallingCard:
+#pragma warning disable CS0618 // Type or member is obsolete
+                case AssetType.Script:
+#pragma warning restore CS0618 // Type or member is obsolete
+                case AssetType.Object:
+                case AssetType.Notecard:
+                case AssetType.Folder:
+                case AssetType.LSLText:
+                case AssetType.LSLBytecode:
+                case AssetType.TextureTGA:
+                case AssetType.SoundWAV:
+                case AssetType.ImageTGA:
+                case AssetType.ImageJPEG:
+                case AssetType.Simstate:
+                case AssetType.Link:
+                case AssetType.LinkFolder:
+                case AssetType.Mesh:
+                case AssetType.Widget:
+                case AssetType.Person:
+                    return false;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(assetType), assetType, null);
+            }
+        }
+        
+#endregion Helpers
+
+#region Transfer Callbacks
+
+        /// <summary>Process an incoming packet and raise the appropriate events</summary>
+        /// <param name="sender">The sender</param>
+        /// <param name="e">The EventArgs object containing the packet data</param>
+        protected void TransferInfoHandler(object? sender, PacketReceivedEventArgs e)
+        {
+            var info = (TransferInfoPacket)e.Packet;
+            Transfer? transfer;
+
+            bool success;
+            lock (Transfers) success = Transfers.TryGetValue(info.TransferInfo.TransferID, out transfer);
+
+            if (success && transfer != null)
+            {
+                var download = (AssetDownload)transfer;
+
+                if (download.Callback == null) return;
+
+                download.Channel = (ChannelType)info.TransferInfo.ChannelType;
+                download.Status = (StatusCode)info.TransferInfo.Status;
+                download.Target = (TargetType)info.TransferInfo.TargetType;
+                download.Size = info.TransferInfo.Size;
+
+                if (download.Status != StatusCode.OK)
+                {
+                    Logger.Warn("Transfer failed with status code " + download.Status, Client);
+
+                    Transfers.TryRemove(download.ID, out _);
+
+                    // No data could have been received before the TransferInfo packet
+                    download.AssetData = Utils.EmptyBytes;
+
+                    // Fire the event with our transfer that contains Success = false;
+                    try { download.Callback(download, null); }
+                    catch (Exception ex) { Logger.Error(ex.Message, ex, Client); }
+                }
+                else
+                {
+                    download.AssetData = new byte[download.Size];
+
+                    if (download.Source == SourceType.Asset && info.TransferInfo.Params.Length == 20)
+                    {
+                        download.AssetID = new UUID(info.TransferInfo.Params, 0);
+                        download.AssetType = (AssetType)(sbyte)info.TransferInfo.Params[16];
+
+                        //Client.DebugLog(String.Format("TransferInfo packet received. AssetID: {0} Type: {1}",
+                        //    transfer.AssetID, type));
+                    }
+                    else if (download.Source == SourceType.SimInventoryItem && info.TransferInfo.Params.Length == 100)
+                    {
+                        UUID agentID   = new UUID(info.TransferInfo.Params, 0);
+                        UUID sessionID = new UUID(info.TransferInfo.Params, 16);
+                        UUID ownerID   = new UUID(info.TransferInfo.Params, 32);
+                        UUID taskID    = new UUID(info.TransferInfo.Params, 48);
+                        UUID itemID    = new UUID(info.TransferInfo.Params, 64);
+                        download.AssetID   = new UUID(info.TransferInfo.Params, 80);
+                        download.AssetType = (AssetType)(sbyte)info.TransferInfo.Params[96];
+
+                        Logger.DebugLog(
+                            $"TransferInfo: AgentID={agentID} SessionID={sessionID} OwnerID={ownerID} " +
+                            $"TaskID={taskID} ItemID={itemID} AssetID={download.AssetID} Type={download.AssetType}",
+                            Client);
+                    }
+                    else
+                    {
+                        Logger.Warn("Received a TransferInfo packet with a SourceType of " + download.Source +
+                            " and a Params field length of " + info.TransferInfo.Params.Length, Client);
+                    }
+                }
+                try { download.HeaderReceivedTcs.TrySetResult(true); } catch { }
+            }
+            else
+            {
+                Logger.Warn("Received a TransferInfo packet for an asset we didn't request, TransferID: " +
+                    info.TransferInfo.TransferID, Client);
+            }
+        }
+
+        /// <summary>Process an incoming packet and raise the appropriate events</summary>
+        /// <param name="sender">The sender</param>
+        /// <param name="e">The EventArgs object containing the packet data</param>
+        protected void TransferPacketHandler(object? sender, PacketReceivedEventArgs e)
+        {
+            Task.Run(async () =>
+            {
+                TransferPacketPacket asset = (TransferPacketPacket)e.Packet;
+                Transfer? transfer = null;
+
+                bool success;
+                lock (Transfers) success = Transfers.TryGetValue(asset.TransferData.TransferID, out transfer);
+
+                // skip if we couldn't find the transfer
+                if (!success || transfer == null) { return; }
+                
+                var download = transfer as AssetDownload;
+                if (download == null) return;
+                if (download.Size == 0)
+                {
+                    Logger.DebugLog("TransferPacket received ahead of the transfer header, blocking...", Client);
+
+                    // Await header or timeout
+                    try
+                    {
+                        var headerTask = download.HeaderReceivedTcs.Task;
+                        var delayTask = Task.Delay(TRANSFER_HEADER_TIMEOUT);
+                        var completed = await Task.WhenAny(headerTask, delayTask).ConfigureAwait(false);
+
+                        if (completed != headerTask || download.Size == 0)
+                        {
+                            Logger.Warn($"Timed out while waiting for the asset header to download for {download.ID}", Client);
+
+                            // Abort the transfer
+                            TransferAbortPacket abort = new TransferAbortPacket
+                            {
+                                TransferInfo =
+                                {
+                                    ChannelType = (int)download.Channel,
+                                    TransferID = download.ID
+                                }
+                            };
+                            Client.Network.SendPacket(abort, download.Simulator);
+
+                            download.Success = false;
+                            Transfers.TryRemove(download.ID, out _);
+
+                            // Fire the event with our transfer that contains Success = false
+                            if (download.Callback != null)
+                            {
+                                try { download.Callback(download, null); }
+                                catch (Exception ex) { Logger.Error(ex.Message, ex, Client); }
+                            }
+
+                            return;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error("Exception while waiting for header: " + ex.Message, ex, Client);
+                        return;
+                    }
+                }
+
+                // Assemble the received packet data, handling out-of-order delivery
+                bool transferCompleted = false;
+                if (asset.TransferData.Data != null && asset.TransferData.Data.Length > 0)
+                {
+                    try
+                    {
+                        lock (download)
+                        {
+                            if (download.nextPacket == asset.TransferData.Packet)
+                            {
+                                byte[] data = asset.TransferData.Data;
+                                while (true)
+                                {
+                                    Buffer.BlockCopy(data, 0, download.AssetData, download.Transferred, data.Length);
+                                    download.Transferred += data.Length;
+                                    download.nextPacket++;
+                                    if (!download.outOfOrderPackets.TryGetValue(download.nextPacket, out byte[]? nextData))
+                                        break;
+                                    data = nextData;
+                                }
+                            }
+                            else
+                            {
+                                download.outOfOrderPackets[asset.TransferData.Packet] = asset.TransferData.Data;
+                            }
+
+                            // Mark completion inside the lock so only one concurrent task fires the callback
+                            if (!download.Success && download.Transferred >= download.Size)
+                            {
+                                download.Success = true;
+                                Transfers.TryRemove(download.ID, out _);
+                                transferCompleted = true;
+                            }
+                        }
+                    }
+                    catch (ArgumentException)
+                    {
+                        Logger.Error(
+                            $"TransferPacket handling failed. Data.Length={asset.TransferData.Data.Length}, AssetData.Length={download.AssetData?.Length}, Packet={asset.TransferData.Packet}",
+                            Client);
+                        return;
+                    }
+                }
+
+                if (transferCompleted)
+                {
+                    Logger.DebugLog($"Transfer for asset {download.AssetID} completed", Client);
+
+                    // Cache successful asset download
+                    await Cache.SaveAssetToCacheAsync(download.AssetID, download.AssetData).ConfigureAwait(false);
+
+                    if (download.Callback != null)
+                    {
+                        try { download.Callback(download, WrapAsset(download)); }
+                        catch (Exception ex) { Logger.Error(ex.Message, ex, Client); }
+                    }
+                }
+            });
+         }
+        #endregion Transfer Callbacks
+
+        #region Xfer Callbacks
+
+        /// <summary>Process an incoming packet and raise the appropriate events</summary>
+        /// <param name="sender">The sender</param>
+        /// <param name="e">The EventArgs object containing the packet data</param>
+        protected void InitiateDownloadPacketHandler(object? sender, PacketReceivedEventArgs e)
+        {
+            InitiateDownloadPacket request = (InitiateDownloadPacket)e.Packet;
+            try
+            {
+                OnInitiateDownload(new InitiateDownloadEventArgs(Utils.BytesToString(request.FileData.SimFilename),
+                    Utils.BytesToString(request.FileData.ViewerFilename)));
+            }
+            catch (Exception ex) { Logger.Error(ex.Message, ex, Client); }
+        }
+        /// <summary>Process an incoming packet and raise the appropriate events</summary>
+        /// <param name="sender">The sender</param>
+        /// <param name="e">The EventArgs object containing the packet data</param>
+        protected void RequestXferHandler(object? sender, PacketReceivedEventArgs e)
+        {
+            if (PendingUpload == null)
+                Logger.Warn("Received a RequestXferPacket for an unknown asset upload", Client);
+            else
+            {
+                AssetUpload upload = PendingUpload;
+                PendingUpload = null;
+                try { upload.ConfirmTcs?.TrySetResult(true); } catch { }
+                RequestXferPacket request = (RequestXferPacket)e.Packet;
+
+                upload.XferID = request.XferID.ID;
+                upload.Type = (AssetType)request.XferID.VFileType;
+
+                UUID transferID = new UUID(upload.XferID);
+                Transfers[transferID] = upload;
+
+                // Send the first packet containing actual asset data
+                SendNextUploadPacket(upload);
+            }
+        }
+
+        /// <summary>Process an incoming packet and raise the appropriate events</summary>
+        /// <param name="sender">The sender</param>
+        /// <param name="e">The EventArgs object containing the packet data</param>
+        protected void ConfirmXferPacketHandler(object? sender, PacketReceivedEventArgs e)
+        {
+            var confirm = (ConfirmXferPacketPacket)e.Packet;
+
+            // Building a new UUID every time an ACK is received for an upload is a horrible
+            // thing, but this whole Xfer system is horrible
+            UUID transferID = new UUID(confirm.XferID.ID);
+            Transfer? transfer = null;
+
+            bool success = Transfers.TryGetValue(transferID, out transfer);
+
+            // skip if we couldn't find the transfer
+            if (!success || transfer == null) { return; }
+            var upload = transfer as AssetUpload;
+            if (upload == null) return;
+
+            //Client.DebugLog(String.Format("ACK for upload {0} of asset type {1} ({2}/{3})",
+            //    upload.AssetID.ToString(), upload.Type, upload.Transferred, upload.Size));
+
+            try { OnUploadProgress(new AssetUploadEventArgs(upload)); }
+            catch (Exception ex) { Logger.Error(ex.Message, ex, Client); }
+
+            if (upload.Transferred < upload.Size)
+                SendNextUploadPacket(upload);
+        }
+
+        /// <summary>Process an incoming packet and raise the appropriate events</summary>
+        /// <param name="sender">The sender</param>
+        /// <param name="e">The EventArgs object containing the packet data</param>
+        protected void AssetUploadCompleteHandler(object? sender, PacketReceivedEventArgs e)
+        {
+            AssetUploadCompletePacket complete = (AssetUploadCompletePacket)e.Packet;
+
+            // If we uploaded an asset in a single packet, RequestXferHandler()
+            // will never be called so we need to set this here as well and signal waiting task
+            try {
+                // Try to find the pending upload and signal its TCS if present
+                AssetUpload? pending = null;
+                lock (PendingUploadLock) pending = PendingUpload;
+                if (pending != null)
+                {
+                    pending.ConfirmTcs?.TrySetResult(true);
+                }
+            } catch { }
+
+            if (m_AssetUploadedEvent != null)
+            {
+                var found = false;
+                var foundTransfer = new KeyValuePair<UUID, Transfer>();
+
+                // Xfer system sucks really really bad. Where is the damn XferID?
+                foreach (var transfer in Transfers)
+                {
+                    if (transfer.Value.GetType() == typeof(AssetUpload))
+                    {
+                        AssetUpload upload = (AssetUpload)transfer.Value;
+
+                        if (upload.AssetID == complete.AssetBlock.UUID)
+                        {
+                            found = true;
+                            foundTransfer = transfer;
+                            upload.Success = complete.AssetBlock.Success;
+                            upload.Type = (AssetType)complete.AssetBlock.Type;
+                            break;
+                        }
+                    }
+                }
+
+                if (found)
+                {
+                    Transfers.TryRemove(foundTransfer.Key, out _);
+
+                    try { OnAssetUploaded(new AssetUploadEventArgs((AssetUpload)foundTransfer.Value)); }
+                    catch (Exception ex) { Logger.Error(ex.Message, ex, Client); }
+                }
+                else
+                {
+                    Logger.Warn(
+                        $"Got an AssetUploadComplete on an unrecognized asset, AssetID: {complete.AssetBlock.UUID}, Type: {(AssetType)complete.AssetBlock.Type}, Success: {complete.AssetBlock.Success}");
+                }
+            }
+        }
+
+        /// <summary>Process an incoming packet and raise the appropriate events</summary>
+        /// <param name="sender">The sender</param>
+        /// <param name="e">The EventArgs object containing the packet data</param>
+        protected void SendXferPacketHandler(object? sender, PacketReceivedEventArgs e)
+        {
+            var xfer = (SendXferPacketPacket)e.Packet;
+
+            // Lame ulong to UUID conversion, please go away Xfer system
+            UUID transferID = new UUID(xfer.XferID.ID);
+            Transfer? transfer = null;
+
+            bool success = Transfers.TryGetValue(transferID, out transfer);
+
+            // skip if we couldn't find the transfer
+            if (!success || transfer == null) return;
+            
+            var download = (XferDownload)transfer;
+
+            // Apply a mask to get rid of the "end of transfer" bit
+            uint packetNum = xfer.XferID.Packet & 0x0FFFFFFF;
+
+            // Check for out of order packets, possibly indicating a resend
+            if (packetNum != download.PacketNum)
+            {
+                if (packetNum == download.PacketNum - 1)
+                {
+                    Logger.DebugLog("Resending Xfer download confirmation for packet " + packetNum, Client);
+                    SendConfirmXferPacket(download.XferID, packetNum);
+                }
+                else
+                {
+                    Logger.Warn($"Out of order Xfer packet in a download, got {packetNum} expecting {download.PacketNum}", Client);
+                    // Re-confirm the last packet we actually received
+                    SendConfirmXferPacket(download.XferID, download.PacketNum - 1);
+                }
+
+                return;
+            }
+
+            if (packetNum == 0)
+            {
+                // This is the first packet received in the download, the first four bytes are a size integer
+                // in little endian ordering
+                byte[] bytes = xfer.DataPacket.Data;
+                download.Size = (bytes[0] + (bytes[1] << 8) + (bytes[2] << 16) + (bytes[3] << 24));
+                download.AssetData = new byte[download.Size];
+
+                Logger.DebugLog("Received first packet in an Xfer download of size " + download.Size);
+
+                Buffer.BlockCopy(xfer.DataPacket.Data, 4, download.AssetData, 0, xfer.DataPacket.Data.Length - 4);
+                download.Transferred += xfer.DataPacket.Data.Length - 4;
+            }
+            else
+            {
+                Buffer.BlockCopy(xfer.DataPacket.Data, 0, download.AssetData, 1000 * (int)packetNum, xfer.DataPacket.Data.Length);
+                download.Transferred += xfer.DataPacket.Data.Length;
+            }
+
+            // Increment the packet number to the packet we are expecting next
+            download.PacketNum++;
+
+            // Confirm receiving this packet
+            SendConfirmXferPacket(download.XferID, packetNum);
+
+            if ((xfer.XferID.Packet & 0x80000000) != 0)
+            {
+                // This is the last packet in the transfer
+                Logger.DebugLog($"Xfer download for asset " +
+                                $"{(string.IsNullOrEmpty(download.Filename) ? download.VFileID.ToString() : download.Filename)} completed",
+                                Client);
+
+                download.Success = true;
+                Transfers.TryRemove(download.ID, out _);
+
+                try { OnXferReceived(new XferReceivedEventArgs(download)); }
+                catch (Exception ex) { Logger.Error(ex.Message, ex, Client); }
+            }
+        }
+
+        /// <summary>Process an incoming packet and raise the appropriate events</summary>
+        /// <param name="sender">The sender</param>
+        /// <param name="e">The EventArgs object containing the packet data</param>
+        protected void AbortXferHandler(object? sender, PacketReceivedEventArgs e)
+        {
+            AbortXferPacket abort = (AbortXferPacket)e.Packet;
+            XferDownload? download = null;
+
+            // Lame ulong to UUID conversion, please go away Xfer system
+            UUID transferID = new UUID(abort.XferID.ID);
+
+            if (Transfers.TryRemove(transferID, out var transferObj))
+            {
+                download = (XferDownload)transferObj;
+            }
+
+            if (download != null && m_XferReceivedEvent != null)
+            {
+                download.Success = false;
+                download.Error = (TransferError)abort.XferID.Result;
+
+                try { OnXferReceived(new XferReceivedEventArgs(download)); }
+                catch (Exception ex) { Logger.Error(ex.Message, ex, Client); }
+            }
+        }
+#endregion Xfer Callbacks
+    }
+#region EventArg classes
+    // <summary>Provides data for XferReceived event</summary>
+    public class XferReceivedEventArgs : EventArgs
+    {
+        /// <summary>Xfer data</summary>
+        public XferDownload Xfer { get; }
+
+        public XferReceivedEventArgs(XferDownload xfer)
+        {
+            this.Xfer = xfer;
+        }
+    }
+
+    // <summary>Provides data for AssetUploaded event</summary>
+    public class AssetUploadEventArgs : EventArgs
+    {
+        /// <summary>Upload data</summary>
+        public AssetUpload Upload { get; }
+
+        public AssetUploadEventArgs(AssetUpload upload)
+        {
+            this.Upload = upload;
+        }
+    }
+
+    // <summary>Provides data for InitiateDownloaded event</summary>
+    public class InitiateDownloadEventArgs : EventArgs
+    {
+        /// <summary>Filename used on the simulator</summary>
+        public string SimFileName { get; }
+
+        /// <summary>Filename used by the client</summary>
+        public string ViewerFileName { get; }
+
+        public InitiateDownloadEventArgs(string simFilename, string viewerFilename)
+        {
+            this.SimFileName = simFilename;
+            this.ViewerFileName = viewerFilename;
+        }
+    }
+
+    // <summary>Provides data for ImageReceiveProgress event</summary>
+    public class ImageReceiveProgressEventArgs : EventArgs
+    {
+        /// <summary>UUID of the image that is in progress</summary>
+        public UUID ImageID { get; }
+
+        /// <summary>Number of bytes received so far</summary>
+        public int Received { get; }
+
+        /// <summary>Image size in bytes</summary>
+        public int Total { get; }
+
+        public ImageReceiveProgressEventArgs(UUID imageID, int received, int total)
+        {
+            this.ImageID = imageID;
+            this.Received = received;
+            this.Total = total;
+        }
+    }
+#endregion
+}

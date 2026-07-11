@@ -1,0 +1,725 @@
+/*
+ * Copyright (c) 2006-2016, openmetaverse.co
+ * All rights reserved.
+ *
+ * - Redistribution and use in source and binary forms, with or without
+ *   modification, are permitted provided that the following conditions are met:
+ *
+ * - Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
+ * - Neither the name of the openmetaverse.co nor the names
+ *   of its contributors may be used to endorse or promote products derived from
+ *   this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Reflection;
+using System.Text;
+using ComponentAce.Compression.Libs.zlib;
+using LibreMetaverse.StructuredData;
+
+namespace LibreMetaverse
+{
+    /// <summary>
+    /// Static helper functions and global variables
+    /// </summary>
+    public static class Helpers
+    {
+        /// <summary>This header flag signals that ACKs are appended to the packet</summary>
+        public const byte MSG_APPENDED_ACKS = 0x10;
+        /// <summary>This header flag signals that this packet has been sent before</summary>
+        public const byte MSG_RESENT = 0x20;
+        /// <summary>This header flags signals that an ACK is expected for this packet</summary>
+        public const byte MSG_RELIABLE = 0x40;
+        /// <summary>This header flag signals that the message is compressed using zerocoding</summary>
+        public const byte MSG_ZEROCODED = 0x80;
+
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="offset"></param>
+        /// <returns></returns>
+        public static short TEOffsetShort(float offset)
+        {
+            offset = Utils.Clamp(offset, -1.0f, 1.0f);
+            offset *= 32767.0f;
+            return (short)Math.Round(offset);
+        }
+
+        public static IEnumerable<string> SplitBy(this string str, int chunkLength)
+        {
+            if (string.IsNullOrEmpty(str)) throw new ArgumentException(nameof(str));
+            if (chunkLength < 1) throw new ArgumentException(nameof(chunkLength));
+
+            for (int i = 0; i < str.Length; i += chunkLength)
+            {
+                if (chunkLength + i > str.Length)
+                    chunkLength = str.Length - i;
+
+                yield return str.Substring(i, chunkLength);
+            }
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="bytes"></param>
+        /// <param name="pos"></param>
+        /// <returns></returns>
+        public static float TEOffsetFloat(byte[] bytes, int pos)
+        {
+            float offset = (float)BitConverter.ToInt16(bytes, pos);
+            return offset / 32767.0f;
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="rotation"></param>
+        /// <returns></returns>
+        public static short TERotationShort(float rotation)
+        {
+            const float TWO_PI = 6.283185307179586476925286766559f;
+            return (short)Math.Round(((Math.IEEERemainder(rotation, TWO_PI) / TWO_PI) * 32768.0f) + 0.5f);
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="bytes"></param>
+        /// <param name="pos"></param>
+        /// <returns></returns>
+        public static float TERotationFloat(byte[] bytes, int pos)
+        {
+            const float TWO_PI = 6.283185307179586476925286766559f;
+            return ((float)(bytes[pos] | (bytes[pos + 1] << 8)) / 32768.0f) * TWO_PI;
+        }
+
+        public static byte TEGlowByte(float glow)
+        {
+            return (byte)(glow * 255.0f);
+        }
+
+        public static float TEGlowFloat(byte[] bytes, int pos)
+        {
+            return (float)bytes[pos] / 255.0f;
+        }
+
+        /// <summary>
+        /// Given an X/Y location in absolute (grid-relative) terms, a region
+        /// handle is returned along with the local X/Y location in that region
+        /// </summary>
+        /// <remarks>
+        /// NOTE: this does not work for varregions -- the region handle is correct but
+        /// the local X,Y are wrong. TODO: create new function
+        /// that takes a reference to the region and thus can calculate region local address.
+        /// </remarks>
+        /// <param name="globalX">The absolute X location, a number such as 
+        /// 255360.35</param>
+        /// <param name="globalY">The absolute Y location, a number such as
+        /// 255360.35</param>
+        /// <param name="localX">The sim-local X position of the global X
+        /// position, a value from 0.0 to 256.0</param>
+        /// <param name="localY">The sim-local Y position of the global Y
+        /// position, a value from 0.0 to 256.0</param>
+        /// <returns>A 64-bit region handle that can be used to teleport to</returns>
+        public static ulong GlobalPosToRegionHandle(float globalX, float globalY, out float localX, out float localY)
+        {
+            uint x = ((uint)globalX / Simulator.DefaultRegionSizeX) * Simulator.DefaultRegionSizeX;
+            uint y = ((uint)globalY / Simulator.DefaultRegionSizeY) * Simulator.DefaultRegionSizeY;
+            localX = globalX - (float)x;
+            localY = globalY - (float)y;
+            return Utils.UIntsToLong(x, y);
+        }
+
+        /// <summary>
+        /// Converts a floating point number to a terse string format used for
+        /// transmitting numbers in wearable asset files
+        /// </summary>
+        /// <param name="val">Floating point number to convert to a string</param>
+        /// <returns>A terse string representation of the input number</returns>
+        public static string FloatToTerseString(float val)
+        {
+            string s = string.Format(Utils.EnUsCulture, "{0:.00}", val);
+
+            if (val == 0)
+                return ".00";
+
+            // Trim trailing zeroes
+            while (s[s.Length - 1] == '0')
+                s = s.Remove(s.Length - 1, 1);
+
+            // Remove superfluous decimal places after the trim
+            if (s[s.Length - 1] == '.')
+                s = s.Remove(s.Length - 1, 1);
+            // Remove leading zeroes after a negative sign
+            else if (s[0] == '-' && s[1] == '0')
+                s = s.Remove(1, 1);
+            // Remove leading zeroes in positive numbers
+            else if (s[0] == '0')
+                s = s.Remove(0, 1);
+
+            return s;
+        }
+
+        /// <summary>
+        /// Convert a variable length field (byte array) to a string, with a
+        /// field name prepended to each line of the output
+        /// </summary>
+        /// <remarks>If the byte array has unprintable characters in it, a 
+        /// hex dump will be written instead</remarks>
+        /// <param name="output">The StringBuilder object to write to</param>
+        /// <param name="bytes">The byte array to convert to a string</param>
+        /// <param name="fieldName">A field name to prepend to each line of output</param>
+        internal static void FieldToString(StringBuilder output, byte[] bytes, string fieldName)
+        {
+            // Check for a common case
+            if (bytes.Length == 0) return;
+
+            bool printable = true;
+
+            for (int i = 0; i < bytes.Length; ++i)
+            {
+                // Check if there are any unprintable characters in the array
+                byte b = bytes[i];
+                if ((b < 0x20 || b > 0x7E) && b != 0x09
+                    && b != 0x0D && b != 0x0A && b != 0x00)
+                {
+                    printable = false;
+                    break;
+                }
+            }
+
+            if (printable)
+            {
+                if (fieldName.Length > 0)
+                {
+                    output.Append(fieldName);
+                    output.Append(": ");
+                }
+
+                output.Append(bytes[bytes.Length - 1] == 0x00
+                    ? Encoding.UTF8.GetString(bytes, 0, bytes.Length - 1)
+                    : Encoding.UTF8.GetString(bytes, 0, bytes.Length));
+            }
+            else
+            {
+                for (int i = 0; i < bytes.Length; i += 16)
+                {
+                    if (i != 0)
+                        output.Append('\n');
+                    if (fieldName.Length > 0)
+                    {
+                        output.Append(fieldName);
+                        output.Append(": ");
+                    }
+
+                    for (int j = 0; j < 16; j++)
+                    {
+                        output.Append((i + j) < bytes.Length ? $"{bytes[i + j]:X2} " : "   ");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Decode a zerocoded byte array, used to decompress packets marked
+        /// with the zerocoded flag
+        /// </summary>
+        /// <remarks>Any time a zero is encountered, the next byte is a count 
+        /// of how many zeroes to expand. One zero is encoded with 0x00 0x01, 
+        /// two zeroes is 0x00 0x02, three zeroes is 0x00 0x03, etc. The 
+        /// first four bytes are copied directly to the output buffer.
+        /// </remarks>
+        /// <param name="src">The byte array to decode</param>
+        /// <param name="srclen">The length of the byte array to decode. This 
+        /// would be the length of the packet up to (but not including) any
+        /// appended ACKs</param>
+        /// <param name="dest">The output byte array to decode to</param>
+        /// <returns>The length of the output buffer</returns>
+        public static int ZeroDecode(byte[]? src, int srclen, byte[]? dest)
+        {
+            if (src == null)
+                throw new ArgumentNullException(nameof(src));
+            
+            if (dest == null)
+                throw new ArgumentNullException(nameof(dest));
+            
+            if (srclen > src.Length)
+                throw new ArgumentException("srclen cannot be greater than src.Length", nameof(srclen));
+            
+            if (srclen < 6)
+                throw new ArgumentException("srclen must be at least 6 bytes for packet header", nameof(srclen));
+
+            uint zerolen = 0;
+            int bodylen = 0;
+            uint i = 0;
+
+            try
+            {
+                Buffer.BlockCopy(src, 0, dest, 0, 6);
+                zerolen = 6;
+                bodylen = srclen;
+
+                for (i = zerolen; i < bodylen; i++)
+                {
+                    if (src[i] == 0x00)
+                    {
+                        // If the zero marker is the last byte in the source this is technically
+                        // malformed zerocoding (no count byte). Instead of throwing and failing
+                        // callers, be tolerant: treat a trailing 0x00 as a single zero (count=1)
+                        // and continue processing. This prevents intermittent malformed packets
+                        // from bringing down the client or CI runs while still preserving
+                        // reasonable decoding behavior.
+                        byte zeroCount;
+                        if (i + 1 >= srclen)
+                        {
+                            // Log a warning but continue with a count of 1
+                            try { Logger.Warn($"ZeroDecode: trailing zero marker at end of buffer at position {i}, srclen={srclen}"); } catch { }
+                            zeroCount = 1;
+                        }
+                        else
+                        {
+                            zeroCount = src[i + 1];
+                        }
+
+                        // Check if destination buffer has enough space
+                        if (zerolen + zeroCount > dest.Length)
+                            throw new IndexOutOfRangeException($"ZeroDecode: Destination buffer overflow, need {zerolen + zeroCount} bytes but dest.Length={dest.Length}");
+
+                        for (byte j = 0; j < zeroCount; j++)
+                        {
+                            dest[zerolen++] = 0x00;
+                        }
+
+                        // If we consumed a count byte advance the source index
+                        if (i + 1 < srclen) i++;
+                    }
+                    else
+                    {
+                        // Check destination buffer bounds
+                        if (zerolen >= dest.Length)
+                            throw new IndexOutOfRangeException($"ZeroDecode: Destination buffer overflow at position {zerolen}, dest.Length={dest.Length}");
+                        
+                        dest[zerolen++] = src[i];
+                    }
+                }
+
+                // Copy appended ACKs
+                for (; i < srclen; i++)
+                {
+                    if (zerolen >= dest.Length)
+                        throw new IndexOutOfRangeException($"ZeroDecode: Destination buffer overflow while copying ACKs at position {zerolen}, dest.Length={dest.Length}");
+                    
+                    dest[zerolen++] = src[i];
+                }
+
+                return (int)zerolen;
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(
+                    $"Zerodecoding error: i={i}, srclen={srclen}, bodylen={bodylen}, zerolen={zerolen}\n{Utils.BytesToHexString(src, srclen, null)}\n{ex}", Microsoft.Extensions.Logging.LogLevel.Error);
+
+                throw new IndexOutOfRangeException(
+                    $"Zerodecoding error: i={i}, srclen={srclen}, bodylen={bodylen}, zerolen={zerolen}\n{Utils.BytesToHexString(src, srclen, null)}\n{ex.InnerException}");
+            }
+        }
+
+        /// <summary>
+        /// Encode a byte array with zerocoding. Used to compress packets marked
+        /// with the zerocoded flag. Any zeroes in the array are compressed down
+        /// to a single zero byte followed by a count of how many zeroes to expand
+        /// out. A single zero becomes 0x00 0x01, two zeroes becomes 0x00 0x02,
+        /// three zeroes becomes 0x00 0x03, etc. The first four bytes are copied
+        /// directly to the output buffer.
+        /// </summary>
+        /// <param name="src">The byte array to encode</param>
+        /// <param name="srclen">The length of the byte array to encode</param>
+        /// <param name="dest">The output byte array to encode to</param>
+        /// <returns>The length of the output buffer</returns>
+        public static int ZeroEncode(byte[]? src, int srclen, byte[]? dest)
+        {
+            if (src == null)
+                throw new ArgumentNullException(nameof(src));
+            
+            if (dest == null)
+                throw new ArgumentNullException(nameof(dest));
+            
+            if (srclen > src.Length)
+                throw new ArgumentException("srclen cannot be greater than src.Length", nameof(srclen));
+            
+            if (srclen < 6)
+                throw new ArgumentException("srclen must be at least 6 bytes for packet header", nameof(srclen));
+
+            uint zerolen = 0;
+            byte zerocount = 0;
+
+            Buffer.BlockCopy(src, 0, dest, 0, 6);
+            zerolen += 6;
+
+            int bodylen;
+            if ((src[0] & MSG_APPENDED_ACKS) == 0)
+            {
+                bodylen = srclen;
+            }
+            else
+            {
+                bodylen = srclen - src[srclen - 1] * 4 - 1;
+            }
+
+            uint i;
+            for (i = zerolen; i < bodylen; i++)
+            {
+                if (src[i] == 0x00)
+                {
+                    zerocount++;
+
+                    // Handle byte overflow: if we've hit 255 zeros, flush them out
+                    if (zerocount == 0)
+                    {
+                        // We wrapped around from 255 -> 0, so write out 255 zeros
+                        if (zerolen + 2 > dest.Length)
+                            throw new IndexOutOfRangeException($"ZeroEncode: Destination buffer overflow at position {zerolen}, dest.Length={dest.Length}");
+                        
+                        dest[zerolen++] = 0x00;
+                        dest[zerolen++] = 0xff;  // 255 zeros
+                        zerocount = 1; // Current zero starts a new count
+                    }
+                }
+                else
+                {
+                    if (zerocount != 0)
+                    {
+                        if (zerolen + 2 > dest.Length)
+                            throw new IndexOutOfRangeException($"ZeroEncode: Destination buffer overflow at position {zerolen}, dest.Length={dest.Length}");
+                        
+                        dest[zerolen++] = 0x00;
+                        dest[zerolen++] = (byte)zerocount;
+                        zerocount = 0;
+                    }
+
+                    if (zerolen >= dest.Length)
+                        throw new IndexOutOfRangeException($"ZeroEncode: Destination buffer overflow at position {zerolen}, dest.Length={dest.Length}");
+                    
+                    dest[zerolen++] = src[i];
+                }
+            }
+
+            if (zerocount != 0)
+            {
+                if (zerolen + 2 > dest.Length)
+                    throw new IndexOutOfRangeException($"ZeroEncode: Destination buffer overflow at position {zerolen}, dest.Length={dest.Length}");
+                
+                dest[zerolen++] = 0x00;
+                dest[zerolen++] = (byte)zerocount;
+            }
+
+            // copy appended ACKs
+            for (; i < srclen; i++)
+            {
+                if (zerolen >= dest.Length)
+                    throw new IndexOutOfRangeException($"ZeroEncode: Destination buffer overflow while copying ACKs at position {zerolen}, dest.Length={dest.Length}");
+                
+                dest[zerolen++] = src[i];
+            }
+
+            return (int)zerolen;
+        }
+
+        /// <summary>
+        /// Calculates the CRC (cyclic redundancy check) needed to upload inventory.
+        /// </summary>
+        /// <param name="creationDate">Creation date</param>
+        /// <param name="saleType">Sale type</param>
+        /// <param name="invType">Inventory type</param>
+        /// <param name="type">Type</param>
+        /// <param name="assetID">Asset ID</param>
+        /// <param name="groupID">Group ID</param>
+        /// <param name="salePrice">Sale price</param>
+        /// <param name="ownerID">Owner ID</param>
+        /// <param name="creatorID">Creator ID</param>
+        /// <param name="itemID">Item ID</param>
+        /// <param name="folderID">Folder ID</param>
+        /// <param name="everyoneMask">Everyone mask (permissions)</param>
+        /// <param name="flags">Flags</param>
+        /// <param name="nextOwnerMask">Next owner mask (permissions)</param>
+        /// <param name="groupMask">Group mask (permissions)</param>
+        /// <param name="ownerMask">Owner mask (permissions)</param>
+        /// <returns>The calculated CRC</returns>
+        public static uint InventoryCRC(int creationDate, byte saleType, sbyte invType, sbyte type,
+            UUID assetID, UUID groupID, int salePrice, UUID ownerID, UUID creatorID,
+            UUID itemID, UUID folderID, uint everyoneMask, uint flags, uint nextOwnerMask,
+            uint groupMask, uint ownerMask)
+        {
+            uint CRC = 0;
+
+            // IDs
+            CRC += assetID.CRC(); // AssetID
+            CRC += folderID.CRC(); // FolderID
+            CRC += itemID.CRC(); // ItemID
+
+            // Permission stuff
+            CRC += creatorID.CRC(); // CreatorID
+            CRC += ownerID.CRC(); // OwnerID
+            CRC += groupID.CRC(); // GroupID
+
+            // CRC += another 4 words which always seem to be zero -- unclear if this is a UUID or what
+            CRC += ownerMask;
+            CRC += nextOwnerMask;
+            CRC += everyoneMask;
+            CRC += groupMask;
+
+            // The rest of the CRC fields
+            CRC += flags; // Flags
+            CRC += (uint)invType; // InvType
+            CRC += (uint)type; // Type 
+            CRC += (uint)creationDate; // CreationDate
+            CRC += (uint)salePrice;    // SalePrice
+            CRC += (uint)((uint)saleType * 0x07073096); // SaleType
+
+            return CRC;
+        }
+
+        /// <summary>
+        /// Attempts to load a file embedded in the assembly
+        /// </summary>
+        /// <param name="resourceName">The filename of the resource to load</param>
+        /// <returns>A Stream for the requested file, or null if the resource
+        /// was not successfully loaded</returns>
+        public static Stream? GetResourceStream(string resourceName)
+        {
+            return GetResourceStream(resourceName, "openmetaverse_data");
+        }
+
+        /// <summary>
+        /// Attempts to load a file either embedded in the assembly or found in
+        /// a given search path
+        /// </summary>
+        /// <param name="resourceName">The filename of the resource to load</param>
+        /// <param name="searchPath">An optional path that will be searched if
+        /// the asset is not found embedded in the assembly</param>
+        /// <returns>A Stream for the requested file, or null if the resource
+        /// was not successfully loaded</returns>
+        public static Stream? GetResourceStream(string resourceName, string searchPath)
+        {
+            if (searchPath != null)
+            {
+                Assembly gea = Assembly.GetEntryAssembly() ?? typeof(Helpers).Assembly;
+#pragma warning disable IL3000 // Location returns empty string in single-file/AOT; we handle that below
+                var loc = gea.Location;
+#pragma warning restore IL3000
+                var baseDir = string.IsNullOrEmpty(loc)
+                    ? AppContext.BaseDirectory
+                    : Path.GetDirectoryName(loc) ?? AppContext.BaseDirectory;
+                string dirname = Path.Combine(baseDir, searchPath);
+
+                string filename = Path.Combine(dirname, resourceName);
+                try
+                {
+                    return new FileStream(
+                        filename,
+                        FileMode.Open, FileAccess.Read, FileShare.Read);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"Failed opening resource from file {filename}: {ex.Message}", Microsoft.Extensions.Logging.LogLevel.Error);
+                }
+            }
+            else
+            {
+                try
+                {
+                    Assembly a = Assembly.GetExecutingAssembly();
+                    Stream? s = a.GetManifestResourceStream("LibreMetaverse.Resources." + resourceName);
+                    if (s != null) return s;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"Failed opening resource stream: {ex.Message}", Microsoft.Extensions.Logging.LogLevel.Error);
+                }
+            }
+
+            return null;
+        }
+        /// <summary>
+        /// Converts a list of primitives to an object that can be serialized
+        /// with the LLSD system
+        /// </summary>
+        /// <param name="prims">Primitives to convert to a serializable object</param>
+        /// <returns>An object that can be serialized with LLSD</returns>
+        public static OSD PrimListToOSD(List<Primitive> prims)
+        {
+            OSDMap map = new OSDMap(prims.Count);
+
+            foreach (Primitive prim in prims)
+                map.Add(prim.LocalID.ToString(), prim.GetOSD());
+
+            return map;
+        }
+
+        /// <summary>
+        /// Deserializes OSD in to a list of primitives
+        /// </summary>
+        /// <param name="osd">Structure holding the serialized primitive list,
+        /// must be of the SDMap type</param>
+        /// <returns>A list of deserialized primitives</returns>
+        public static List<Primitive> OSDToPrimList(OSD osd)
+        {
+            if (osd.Type != OSDType.Map)
+                throw new ArgumentException("LLSD must be in the Map structure");
+
+            OSDMap map = (OSDMap)osd;
+            List<Primitive> prims = new List<Primitive>(map.Count);
+
+            foreach (KeyValuePair<string, OSD> kvp in map)
+            {
+                Primitive prim = Primitive.FromOSD(kvp.Value);
+                prim.LocalID = uint.Parse(kvp.Key);
+                prims.Add(prim);
+            }
+
+            return prims;
+        }
+
+        /// <summary>
+        /// Converts a struct or class object containing fields only into a key value separated string
+        /// </summary>
+        /// <param name="t">The struct object</param>
+        /// <returns>A string containing the struct fields as the keys, and the field value as the value separated</returns>
+        /// <example>
+        /// <code>
+        /// // Add the following code to any struct or class containing only fields to override the ToString() 
+        /// // method to display the values of the passed object
+        /// 
+        /// /// <summary>Print the struct data as a string</summary>
+        /// ///<returns>A string containing the field name, and field value</returns>
+        ///public override string ToString()
+        ///{
+        ///    return Helpers.StructToString(this);
+        ///}
+        /// </code>
+        /// </example>
+        [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("Uses runtime reflection to enumerate struct fields. Not AOT-safe. Consider an explicit ToString() override instead.")]
+        public static string StructToString(object t)
+        {
+            StringBuilder result = new StringBuilder();
+            Type structType = t.GetType();
+            FieldInfo[] fields = structType.GetFields();
+
+            foreach (FieldInfo field in fields)
+            {
+                result.Append(field.Name + ": " + field.GetValue(t) + " ");
+            }
+            result.AppendLine();
+            return result.ToString().TrimEnd();
+        }
+
+        public static void CopyStream(Stream input, Stream output)
+        {
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                output.Write(buffer, 0, read);
+            }
+        }
+
+        public static byte[] ZCompressOSD(OSD data)
+        {
+            byte[] ret = Array.Empty<byte>();
+
+            using (MemoryStream outMemoryStream = new MemoryStream())
+            using (ZOutputStream outZStream = new ZOutputStream(outMemoryStream, zlibConst.Z_BEST_COMPRESSION))
+            using (Stream inMemoryStream = new MemoryStream(OSDParser.SerializeLLSDBinary(data, false)))
+            {
+                CopyStream(inMemoryStream, outZStream);
+                outZStream.finish();
+                ret = outMemoryStream.ToArray();
+            }
+
+            return ret;
+        }
+
+        public static OSD ZDecompressOSD(byte[] data)
+        {
+            OSD ret;
+
+            using (MemoryStream input = new MemoryStream(data))
+            using (MemoryStream output = new MemoryStream())
+            using (ZOutputStream zout = new ZOutputStream(output))
+            {
+                CopyStream(input, zout);
+                zout.finish();
+                output.Seek(0, SeekOrigin.Begin);
+                ret = OSDParser.DeserializeLLSDBinary(output);
+            }
+
+            return ret;
+        }
+
+        /// <summary>
+        /// decompresses a gzipped OSD object
+        /// </summary>
+        /// <param name="meshBytes"></param>
+        /// <returns>the OSD object</returns>
+        public static OSD DecompressOSD(byte[] meshBytes) {
+            OSD? decodedOsd = null;
+
+            using (MemoryStream inMs = new MemoryStream(meshBytes))
+            using (MemoryStream outMs = new MemoryStream())
+            using (DeflateStream decompressionStream = new DeflateStream(inMs, CompressionMode.Decompress))
+            {
+                byte[] readBuffer = new byte[2048];
+                inMs.Read(readBuffer, 0, 2); // skip first 2 bytes in header
+                int readLen = 0;
+
+                while ((readLen = decompressionStream.Read(readBuffer, 0, readBuffer.Length)) > 0)
+                    outMs.Write(readBuffer, 0, readLen);
+
+                outMs.Flush();
+
+                outMs.Seek(0, SeekOrigin.Begin);
+
+                byte[] decompressedBuf = outMs.GetBuffer();
+
+                decodedOsd = OSDParser.DeserializeLLSDBinary(decompressedBuf);
+            }
+            return decodedOsd!;
+        }
+
+        /// <summary>
+        /// Execute an action safely catching any exceptions and reporting via logger.
+        /// </summary>
+        public static void SafeAction(Action action, string? actionName = null, Action<string, Exception?>? logger = null)
+        {
+            if (action == null) return;
+
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                var message = string.IsNullOrEmpty(actionName) ? "Error executing action" : $"Error executing {actionName}";
+                logger?.Invoke(message, ex);
+            }
+        }
+    }
+}

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IrcGateway</AssemblyName>
+    <PackageId>IrcGateway</PackageId>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <OutputType>Exe</OutputType>
+    <OutputPath>..\..\..\bin\</OutputPath>
+    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\LibreMetaverse\LibreMetaverse.csproj" />
+    <ProjectReference Include="..\..\..\LibreMetaverse.Types\LibreMetaverse.Types.csproj" />
+  </ItemGroup>
+</Project>

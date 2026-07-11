@@ -1,0 +1,807 @@
+/*
+ * Copyright (c) 2007-2008, openmetaverse.co
+ * Copyright (c) 2024-2026, Sjofn LLC.
+ * All rights reserved.
+ *
+ * - Redistribution and use in source and binary forms, with or without
+ *   modification, are permitted provided that the following conditions are met:
+ *
+ * - Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
+ * - Neither the name of the openmetaverse.co nor the names
+ *   of its contributors may be used to endorse or promote products derived from
+ *   this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using LibreMetaverse.Assets;
+
+namespace LibreMetaverse.Imaging
+{
+    /// <summary>
+    /// A set of textures that are layered on texture of each other and "baked"
+    /// in to a single texture, for avatar appearances
+    /// </summary>
+    public class Baker
+    {
+        #region Properties
+        /// <summary>Final baked texture</summary>
+        public AssetTexture? BakedTexture => bakedTexture;
+
+        /// <summary>Component layers</summary>
+        public List<AppearanceManager.TextureData> Textures => textures;
+
+        /// <summary>Width of the final baked image and scratchpad</summary>
+        public int BakeWidth => bakeWidth;
+
+        /// <summary>Height of the final baked image and scratchpad</summary>
+        public int BakeHeight => bakeHeight;
+
+        /// <summary>Bake type</summary>
+        public BakeType BakeType => bakeType;
+
+        /// <summary>Is this one of the 3 skin bakes</summary>
+        private bool IsSkin => bakeType == BakeType.Head || bakeType == BakeType.LowerBody || bakeType == BakeType.UpperBody;
+
+        #endregion
+
+        #region Private fields
+        /// <summary>Final baked texture</summary>
+        private AssetTexture? bakedTexture;
+        /// <summary>Component layers</summary>
+        private List<AppearanceManager.TextureData> textures = new List<AppearanceManager.TextureData>();
+        /// <summary>Width of the final baked image and scratchpad</summary>
+        private int bakeWidth;
+        /// <summary>Height of the final baked image and scratchpad</summary>
+        private int bakeHeight;
+        /// <summary>Bake type</summary>
+        private BakeType bakeType;
+        #endregion
+
+        #region Constructor
+        /// <summary>
+        /// Default constructor
+        /// </summary>
+        /// <param name="bakeType">Bake type</param>
+        public Baker(BakeType bakeType)
+        {
+            this.bakeType = bakeType;
+
+            if (bakeType == BakeType.Eyes)
+            {
+                bakeWidth = 128;
+                bakeHeight = 128;
+            }
+            else
+            {
+                bakeWidth = 1024;
+                bakeHeight = 1024;
+            }
+        }
+        #endregion
+
+        #region Public methods
+        /// <summary>
+        /// Adds layer for baking
+        /// </summary>
+        /// <param name="tdata">TexturaData struct that contains texture and its params</param>
+        public void AddTexture(AppearanceManager.TextureData tdata)
+        {
+            lock (textures)
+            {
+                textures.Add(tdata);
+            }
+        }
+
+        public void Bake()
+        {
+            bakedTexture = new AssetTexture(new ManagedImage(bakeWidth, bakeHeight,
+                ManagedImage.ImageChannels.Color | ManagedImage.ImageChannels.Alpha | ManagedImage.ImageChannels.Bump));
+
+            // local non-null reference for nullable bakedTexture
+            var baked = bakedTexture!;
+            // baked.Image is nullable; capture a non-null reference for analysis
+            var bakedImage = baked.Image!;
+
+            // These are for head baking, they get special treatment
+            AppearanceManager.TextureData skinTexture = new AppearanceManager.TextureData();
+            List<AppearanceManager.TextureData> tattooTextures = new List<AppearanceManager.TextureData>();
+            List<ManagedImage> alphaWearableTextures = new List<ManagedImage>();
+
+            // Base color for eye bake is white, color of layer0 for others
+            if (bakeType == BakeType.Eyes)
+            {
+                InitBakedLayerColor(Color4.White);
+            }
+            else if (textures.Count > 0)
+            {
+                InitBakedLayerColor(textures[0].Color);
+            }
+
+            // Sort out the special layers we need for head baking and alpha
+            foreach (var tex in textures.Where(tex => tex.Texture != null))
+            {
+                switch (tex.TextureIndex)
+                {
+                    case AvatarTextureIndex.HeadBodypaint:
+                    case AvatarTextureIndex.UpperBodypaint:
+                    case AvatarTextureIndex.LowerBodypaint:
+                        skinTexture = tex;
+                        break;
+                    case AvatarTextureIndex.HeadTattoo:
+                    case AvatarTextureIndex.HeadUniversalTattoo:
+                    case AvatarTextureIndex.UpperTattoo:
+                    case AvatarTextureIndex.LowerTattoo:
+                        tattooTextures.Add(tex);
+                        break;
+                }
+
+                if (tex.TextureIndex >= AvatarTextureIndex.LowerAlpha &&
+                    tex.TextureIndex <= AvatarTextureIndex.HairAlpha)
+                {
+                    var wearableImage = tex.Texture?.Image;
+                    if (wearableImage != null && (wearableImage.Channels & ManagedImage.ImageChannels.Alpha) != 0)
+                    {
+                        alphaWearableTextures.Add(wearableImage.Clone());
+                    }
+                }
+            }
+
+            if (bakeType == BakeType.Head)
+            {
+                if (DrawLayer(LoadResourceLayer("head_color.tga"), false))
+                {
+                    // bakedImage is a non-null local captured below; use it for image operations
+                    AddAlpha(bakedImage, LoadResourceLayer("head_alpha.tga"));
+                    MultiplyLayerFromAlpha(bakedImage, LoadResourceLayer("head_skingrain.tga"));
+                    Logger.Debug("[Bake]: created head master bake");
+                }
+                else
+                {
+                    Logger.Debug("[Bake]: Unable to draw layer from texture file");
+                }
+            }
+
+            if (skinTexture.Texture == null)
+            {
+                if (bakeType == BakeType.UpperBody)
+                {
+                    DrawLayer(LoadResourceLayer("upperbody_color.tga"), false);
+                }
+
+                if (bakeType == BakeType.LowerBody)
+                {
+                    DrawLayer(LoadResourceLayer("lowerbody_color.tga"), false);
+                }
+            }
+
+            // Layer each texture on top of one other, applying alpha masks as we go
+            for (int i = 0; i < textures.Count; i++)
+            {
+                // Skip if we have no texture on this layer
+                if (textures[i].Texture == null) continue;
+
+                // Is this Alpha wearable and does it have an alpha channel?
+                if (textures[i].TextureIndex >= AvatarTextureIndex.LowerAlpha &&
+                        textures[i].TextureIndex <= AvatarTextureIndex.HairAlpha)
+                {
+                    continue;
+                }
+
+                // Don't draw skin and tattoo on head bake first
+                // For head bake the skin and texture are drawn last, go figure
+                if (bakeType == BakeType.Head &&
+                        (textures[i].TextureIndex == AvatarTextureIndex.HeadBodypaint ||
+                        textures[i].TextureIndex == AvatarTextureIndex.HeadTattoo ||
+                        textures[i].TextureIndex == AvatarTextureIndex.HeadUniversalTattoo))
+                {
+                    continue;
+                }
+
+                var texAsset = textures[i].Texture!;
+                if (texAsset.Image == null) continue;
+                ManagedImage texture = texAsset.Image.Clone();
+                //File.WriteAllBytes(bakeType + "-texture-layer-" + textures[i].TextureIndex + "-" + i + ".tga", texture.ExportTGA());
+
+                // Resize texture to the size of baked layer; tile if smaller to avoid stretching
+                if (texture.Width != bakeWidth || texture.Height != bakeHeight)
+                {
+                    if (texture.Width < bakeWidth || texture.Height < bakeHeight)
+                    {
+                        texture = TileTexture(texture, bakeWidth, bakeHeight);
+                    }
+                    else
+                    {
+                        try { texture.ResizeNearestNeighbor(bakeWidth, bakeHeight); }
+                        catch (Exception) { continue; }
+                    }
+                }
+
+                // Special case for hair layer for the head bake
+                // If we don't have skin texture, we discard hair alpha
+                // and apply hair(i==2) pattern over the texture
+                if (skinTexture.Texture == null && bakeType == BakeType.Head && textures[i].TextureIndex == AvatarTextureIndex.Hair)
+                {
+                    if ((texture.Channels & ManagedImage.ImageChannels.Alpha) != 0)
+                    {
+                        for (int j = 0; j < texture.Alpha.Length; j++) texture.Alpha[j] = (byte)255;
+                    }
+                    MultiplyLayerFromAlpha(texture, LoadResourceLayer("head_hair.tga"));
+                }
+
+                // Aply tint and alpha masks except for skin that has a texture
+                // on layer 0 which always overrides other skin settings
+                if (!(textures[i].TextureIndex == AvatarTextureIndex.HeadBodypaint ||
+                        textures[i].TextureIndex == AvatarTextureIndex.UpperBodypaint ||
+                        textures[i].TextureIndex == AvatarTextureIndex.LowerBodypaint))
+                {
+                    ApplyTint(texture, textures[i].Color);
+
+                    // For hair bake, we skip all alpha masks
+                    // and use one from the texture, for both
+                    // alpha and morph layers
+                    if (bakeType == BakeType.Hair)
+                    {
+                    if ((texture.Channels & ManagedImage.ImageChannels.Alpha) != 0)
+                    {
+                        bakedImage.Bump = texture.Alpha;
+                    }
+                    else
+                    {
+                        var bump = bakedImage.Bump!;
+                        for (int j = 0; j < bump.Length; j++) bump[j] = byte.MaxValue;
+                    }
+                    }
+                    // Apply parametrized alpha masks
+                    else if (textures[i].AlphaMasks != null && textures[i].AlphaMasks.Count > 0)
+                    {
+                        // Combined mask for the layer, fully transparent to begin with
+                        ManagedImage combinedMask = new ManagedImage(bakeWidth, bakeHeight, ManagedImage.ImageChannels.Alpha);
+
+                        int addedMasks = 0;
+
+                        // First add mask in normal blend mode
+                        foreach (KeyValuePair<VisualAlphaParam, float> kvp in textures[i].AlphaMasks)
+                        {
+                            if (!MaskBelongsToBake(kvp.Key.TGAFile)) continue;
+
+                            if (!kvp.Key.MultiplyBlend && (kvp.Value > 0f || !kvp.Key.SkipIfZero))
+                            {
+                                ApplyAlpha(combinedMask, kvp.Key, kvp.Value);
+                                //File.WriteAllBytes(bakeType + "-layer-" + i + "-mask-" + addedMasks + ".tga", combinedMask.ExportTGA());
+                                addedMasks++;
+                            }
+                        }
+
+                        // If there were no mask in normal blend mode make aplha fully opaque
+                        if (addedMasks == 0) for (int l = 0; l < combinedMask.Alpha.Length; l++) combinedMask.Alpha[l] = 255;
+
+                        // Add masks in multiply blend mode
+                        foreach (var kvp in textures[i].AlphaMasks.Where(kvp => MaskBelongsToBake(kvp.Key.TGAFile))
+                                     .Where(kvp => kvp.Key.MultiplyBlend && (kvp.Value > 0f || !kvp.Key.SkipIfZero)))
+                        {
+                            ApplyAlpha(combinedMask, kvp.Key, kvp.Value);
+                            //File.WriteAllBytes(bakeType + "-layer-" + i + "-mask-" + addedMasks + ".tga", combinedMask.ExportTGA());
+                            addedMasks++;
+                        }
+
+                        if (addedMasks > 0)
+                        {
+                            // Apply combined alpha mask to the cloned texture
+                            AddAlpha(texture, combinedMask);
+                        }
+
+                        // Is this layer used for morph mask? If it is, use its
+                        // alpha as the morth for the whole bake
+                        if (Textures[i].TextureIndex == AppearanceManager.MorphLayerForBakeType(bakeType))
+                        {
+                            if ((texture.Channels & ManagedImage.ImageChannels.Alpha) != 0)
+                        bakedImage.Bump = texture.Alpha;
+                        }
+
+                        //File.WriteAllBytes(bakeType + "-masked-texture-" + i + ".tga", texture.ExportTGA());
+                    }
+                }
+
+                bool useAlpha = i == 0 && (BakeType == BakeType.Skirt || BakeType == BakeType.Hair);
+                DrawLayer(texture, useAlpha);
+                //File.WriteAllBytes(bakeType + "-layer-" + i + ".tga", texture.ExportTGA());
+            }
+
+            // For head and tattoo, we add skin last
+            if (bakeType == BakeType.Head)
+            {
+                if (skinTexture.Texture?.Image != null)
+                {
+                    ManagedImage texture = skinTexture.Texture.Image.Clone();
+                    if (texture.Width != bakeWidth || texture.Height != bakeHeight)
+                    {
+                        try { texture.ResizeNearestNeighbor(bakeWidth, bakeHeight); }
+                        catch (Exception) { }
+                    }
+                    DrawLayer(texture, false);
+                }
+
+                foreach (var tex in tattooTextures)
+                {
+                    if (tex.Texture?.Image == null) continue;
+                    var texture = tex.Texture.Image.Clone();
+                    if (texture.Width != bakeWidth || texture.Height != bakeHeight)
+                    {
+                        try { texture.ResizeNearestNeighbor(bakeWidth, bakeHeight); }
+                        catch (Exception) { }
+                    }
+                    DrawLayer(texture, false);
+                }
+            }
+
+            // Apply any alpha wearable textures to make parts of the avatar disappear
+            Logger.Debug("[XBakes]: Number of alpha wearable textures: " + alphaWearableTextures.Count);
+            foreach (ManagedImage img in alphaWearableTextures)
+                AddAlpha(bakedImage, img);
+
+            // We are done, encode asset for finalized bake
+            bakedTexture.Encode();
+        }
+
+        private static readonly object ResourceSync = new object();
+
+        public static ManagedImage? LoadResourceLayer(string fileName)
+        {
+            try
+            {
+                lock (ResourceSync)
+                {
+                    Stream? stream = Helpers.GetResourceStream(fileName, Path.Combine(Settings.ResourceDir, "static_assets"));
+                    if (stream != null)
+                    {
+                        using (stream)
+                        {
+                            var image = Targa.DecodeToManagedImage(stream);
+                            if (image != null)
+                            {
+                                return image;
+                            }
+                            else
+                            {
+                                Logger.Error($"Failed loading resource file: {fileName}");
+                                return null;
+                            }
+                        }
+                    }
+                }
+
+                Logger.Error($"Failed loading resource file: {fileName}");
+                return null;
+            }
+            catch (Exception e)
+            {
+                Logger.Error($"Failed loading resource file: {fileName} ({e.Message})", e);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Converts avatar texture index (face) to Bake type
+        /// </summary>
+        /// <param name="index">Face number (AvatarTextureIndex)</param>
+        /// <returns>BakeType, layer to which this texture belongs to</returns>
+        public static BakeType BakeTypeFor(AvatarTextureIndex index)
+        {
+            switch (index)
+            {
+                case AvatarTextureIndex.HeadBodypaint:
+                    return BakeType.Head;
+
+                case AvatarTextureIndex.UpperBodypaint:
+                case AvatarTextureIndex.UpperGloves:
+                case AvatarTextureIndex.UpperUndershirt:
+                case AvatarTextureIndex.UpperShirt:
+                case AvatarTextureIndex.UpperJacket:
+                    return BakeType.UpperBody;
+
+                case AvatarTextureIndex.LowerBodypaint:
+                case AvatarTextureIndex.LowerUnderpants:
+                case AvatarTextureIndex.LowerSocks:
+                case AvatarTextureIndex.LowerShoes:
+                case AvatarTextureIndex.LowerPants:
+                case AvatarTextureIndex.LowerJacket:
+                    return BakeType.LowerBody;
+
+                case AvatarTextureIndex.EyesIris:
+                    return BakeType.Eyes;
+
+                case AvatarTextureIndex.Skirt:
+                    return BakeType.Skirt;
+
+                case AvatarTextureIndex.Hair:
+                    return BakeType.Hair;
+
+                default:
+                    return BakeType.Unknown;
+            }
+        }
+        #endregion
+
+        #region Private layer compositing methods
+
+        private bool MaskBelongsToBake(string mask)
+        {
+            return (bakeType != BakeType.LowerBody || !mask.Contains("upper"))
+                   && (bakeType != BakeType.LowerBody || !mask.Contains("shirt"))
+                   && (bakeType != BakeType.UpperBody || !mask.Contains("lower"));
+        }
+
+        /// <summary>
+        /// Creates a tiled copy of <paramref name="src"/> at
+        /// <paramref name="targetWidth"/> x <paramref name="targetHeight"/>.
+        /// Pixels outside the source bounds repeat by wrap-around (modulo).
+        /// </summary>
+        private static ManagedImage TileTexture(ManagedImage src, int targetWidth, int targetHeight)
+        {
+            var tiled = new ManagedImage(targetWidth, targetHeight, src.Channels);
+            int srcWidth = src.Width;
+            int srcHeight = src.Height;
+            if (srcWidth == 0 || srcHeight == 0) return tiled;
+
+            bool hasColor = (src.Channels & ManagedImage.ImageChannels.Color) != 0;
+            bool hasAlpha = (src.Channels & ManagedImage.ImageChannels.Alpha) != 0;
+            bool hasBump  = (src.Channels & ManagedImage.ImageChannels.Bump)  != 0;
+
+            for (int y = 0; y < targetHeight; y++)
+            {
+                int srcY = y % srcHeight;
+                for (int x = 0; x < targetWidth; x++)
+                {
+                    int srcX   = x % srcWidth;
+                    int dstIdx = y * targetWidth + x;
+                    int srcIdx = srcY * srcWidth + srcX;
+                    if (hasColor)
+                    {
+                        tiled.Red[dstIdx]   = src.Red[srcIdx];
+                        tiled.Green[dstIdx] = src.Green[srcIdx];
+                        tiled.Blue[dstIdx]  = src.Blue[srcIdx];
+                    }
+                    if (hasAlpha) tiled.Alpha[dstIdx] = src.Alpha[srcIdx];
+                    if (hasBump)  tiled.Bump[dstIdx]  = src.Bump[srcIdx];
+                }
+            }
+            return tiled;
+        }
+
+        private bool DrawLayer(ManagedImage? source, bool addSourceAlpha)
+        {
+            if (source == null) return false;
+            if (bakedTexture == null) return false;
+
+            int i = 0;
+
+            // source was null-checked above, capture non-null local for analysis
+            var s = source!;
+
+            var sourceHasColor = ((s.Channels & ManagedImage.ImageChannels.Color) != 0);
+            var sourceHasAlpha = ((s.Channels & ManagedImage.ImageChannels.Alpha) != 0);
+            var sourceHasBump = ((s.Channels & ManagedImage.ImageChannels.Bump) != 0);
+
+            addSourceAlpha = (addSourceAlpha && sourceHasAlpha);
+
+            byte alpha = byte.MaxValue;
+            byte alphaInv = (byte)(byte.MaxValue - alpha);
+
+            // bakedTexture has been checked non-null earlier, capture non-null local for analysis
+            var baked = bakedTexture!;
+            var bakedImage = baked.Image!;
+            byte[] bakedRed = bakedImage.Red;
+            byte[] bakedGreen = bakedImage.Green;
+            byte[] bakedBlue = bakedImage.Blue;
+            byte[] bakedAlpha = bakedImage.Alpha;
+            byte[] bakedBump = bakedImage.Bump;
+
+            byte[]? sourceRed = sourceHasColor ? s.Red : null;
+            byte[]? sourceGreen = sourceHasColor ? s.Green : null;
+            byte[]? sourceBlue = sourceHasColor ? s.Blue : null;
+            byte[]? sourceAlpha = sourceHasAlpha ? s.Alpha : null;
+            byte[]? sourceBump = sourceHasBump ? s.Bump : null;
+
+            bool loadedAlpha = false;
+            for (int y = 0; y < bakeHeight; y++)
+            {
+                for (int x = 0; x < bakeWidth; x++)
+                {
+                    loadedAlpha = false;
+                    alpha = 0;
+                    alphaInv = 0;
+
+                    if (sourceHasAlpha)
+                    {
+                        if (sourceAlpha!.Length > i)
+                        {
+                            loadedAlpha = true;
+                            alpha = sourceAlpha![i];
+                            alphaInv = (byte)(byte.MaxValue - alpha);
+                        }
+                    }
+
+                    if (sourceHasColor)
+                    {
+                        if ((bakedRed.Length > i) && (bakedGreen.Length > i) && (bakedBlue.Length > i))
+                        {
+                            if ((sourceRed!.Length > i) && (sourceGreen!.Length > i) && (sourceBlue!.Length > i))
+                            {
+                                if (loadedAlpha)
+                                {
+                                    bakedRed[i] = (byte)((bakedRed[i] * alphaInv + sourceRed![i] * alpha) >> 8);
+                                    bakedGreen[i] = (byte)((bakedGreen[i] * alphaInv + sourceGreen![i] * alpha) >> 8);
+                                    bakedBlue[i] = (byte)((bakedBlue[i] * alphaInv + sourceBlue![i] * alpha) >> 8);
+                                }
+                                else
+                                {
+                                    bakedRed[i] = sourceRed![i];
+                                    bakedGreen[i] = sourceGreen![i];
+                                    bakedBlue[i] = sourceBlue![i];
+                                }
+                            }
+                        }
+                    }
+
+                    if (addSourceAlpha)
+                    {
+                        if ((sourceAlpha!.Length > i) && (bakedAlpha.Length > i))
+                        {
+                            if (sourceAlpha![i] < bakedAlpha[i])
+                            {
+                                bakedAlpha[i] = sourceAlpha![i];
+                            }
+                        }
+                    }
+
+                    if (sourceHasBump)
+                    {
+                        if (sourceBump!.Length > i)
+                        {
+                            bakedBump[i] = sourceBump![i];
+                        }
+                    }
+
+                    ++i;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Make sure images exist, resize source if needed to match the destination
+        /// </summary>
+        /// <param name="dest">Destination image</param>
+        /// <param name="src">Source image</param>
+        /// <returns>Sanitization was successful</returns>
+        private bool SanitizeLayers(ManagedImage? dest, ManagedImage? src)
+        {
+            if (dest == null || src == null) return false;
+
+            if ((dest.Channels & ManagedImage.ImageChannels.Alpha) == 0)
+            {
+                dest.ConvertChannels(dest.Channels | ManagedImage.ImageChannels.Alpha);
+            }
+
+            if (dest.Width != src.Width || dest.Height != src.Height)
+            {
+                try { src.ResizeNearestNeighbor(dest.Width, dest.Height); }
+                catch (Exception) { return false; }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Returns the per-pixel mask value used to drive alpha/multiply compositing for a
+        /// resource layer. Bundled mask files (e.g. "*_alpha.tga", "head_skingrain.tga") are
+        /// plain single-channel grayscale TGAs whose intensity <i>is</i> the mask value -
+        /// they carry no real alpha channel of their own. Only images that genuinely have an
+        /// alpha channel use it directly; anything else falls back to its Gray/Red data (or an
+        /// RGB average as a last resort) rather than being treated as unconditionally opaque.
+        /// </summary>
+        private static byte[] GetEffectiveMask(ManagedImage img)
+        {
+            if ((img.Channels & ManagedImage.ImageChannels.Alpha) != 0)
+            {
+                return img.Alpha;
+            }
+
+            if ((img.Channels & ManagedImage.ImageChannels.Gray) != 0)
+            {
+                return img.Red;
+            }
+
+            if ((img.Channels & ManagedImage.ImageChannels.Color) != 0)
+            {
+                var n = img.Width * img.Height;
+                var luminance = new byte[n];
+                for (var i = 0; i < n; i++)
+                {
+                    luminance[i] = (byte)((img.Red[i] + img.Green[i] + img.Blue[i]) / 3);
+                }
+                return luminance;
+            }
+
+            var opaque = new byte[img.Width * img.Height];
+            for (var i = 0; i < opaque.Length; i++) opaque[i] = byte.MaxValue;
+            return opaque;
+        }
+
+        private void ApplyAlpha(ManagedImage dest, VisualAlphaParam param, float val)
+        {
+            ManagedImage? src = LoadResourceLayer(param.TGAFile);
+
+            if (dest == null || src == null) return;
+
+            if ((dest.Channels & ManagedImage.ImageChannels.Alpha) == 0)
+            {
+                dest.ConvertChannels(ManagedImage.ImageChannels.Alpha | dest.Channels);
+            }
+
+            if (dest.Width != src.Width || dest.Height != src.Height)
+            {
+                try { src.ResizeNearestNeighbor(dest.Width, dest.Height); }
+                catch (Exception) { return; }
+            }
+
+            var mask = GetEffectiveMask(src);
+            for (int i = 0; i < dest.Alpha.Length; i++)
+            {
+                byte alpha = mask[i] <= ((1 - val) * 255) ? (byte)0 : (byte)255;
+
+                if (param.MultiplyBlend)
+                {
+                    dest.Alpha[i] = (byte)((dest.Alpha[i] * alpha) >> 8);
+                }
+                else
+                {
+                    if (alpha > dest.Alpha[i])
+                    {
+                        dest.Alpha[i] = alpha;
+                    }
+                }
+            }
+        }
+
+        private void AddAlpha(ManagedImage dest, ManagedImage? src)
+        {
+            if (!SanitizeLayers(dest, src)) return;
+
+            var mask = GetEffectiveMask(src!);
+            for (int i = 0; i < dest.Alpha.Length; i++)
+            {
+                if (mask[i] < dest.Alpha[i])
+                {
+                    dest.Alpha[i] = mask[i];
+                }
+            }
+        }
+
+        private void MultiplyLayerFromAlpha(ManagedImage dest, ManagedImage? src)
+        {
+            if (!SanitizeLayers(dest, src)) return;
+
+            var mask = GetEffectiveMask(src!);
+            for (int i = 0; i < dest.Red.Length; i++)
+            {
+                dest.Red[i] = (byte)((dest.Red[i] * mask[i]) >> 8);
+                dest.Green[i] = (byte)((dest.Green[i] * mask[i]) >> 8);
+                dest.Blue[i] = (byte)((dest.Blue[i] * mask[i]) >> 8);
+            }
+        }
+
+        private void ApplyTint(ManagedImage dest, Color4 src)
+        {
+            if (dest == null) return;
+
+            for (int i = 0; i < dest.Red.Length; i++)
+            {
+                dest.Red[i] = (byte)((dest.Red[i] * Utils.FloatToByte(src.R, 0f, 1f)) >> 8);
+                dest.Green[i] = (byte)((dest.Green[i] * Utils.FloatToByte(src.G, 0f, 1f)) >> 8);
+                dest.Blue[i] = (byte)((dest.Blue[i] * Utils.FloatToByte(src.B, 0f, 1f)) >> 8);
+            }
+        }
+
+        /// <summary>
+        /// Fills a baked layer as a solid *appearing* color. The colors are 
+        /// subtly dithered on a 16x16 grid to prevent the JPEG2000 stage from 
+        /// compressing it too far since it seems to cause upload failures if 
+        /// the image is a pure solid color
+        /// </summary>
+        /// <param name="color">Color of the base of this layer</param>
+        private void InitBakedLayerColor(Color4 color)
+        {
+            InitBakedLayerColor(color.R, color.G, color.B);
+        }
+
+        /// <summary>
+        /// Fills a baked layer as a solid *appearing* color. The colors are 
+        /// subtly dithered on a 16x16 grid to prevent the JPEG2000 stage from 
+        /// compressing it too far since it seems to cause upload failures if 
+        /// the image is a pure solid color
+        /// </summary>
+        /// <param name="r">Red value</param>
+        /// <param name="g">Green value</param>
+        /// <param name="b">Blue value</param>
+        private void InitBakedLayerColor(float r, float g, float b)
+        {
+            byte rByte = Utils.FloatToByte(r, 0f, 1f);
+            byte gByte = Utils.FloatToByte(g, 0f, 1f);
+            byte bByte = Utils.FloatToByte(b, 0f, 1f);
+
+            var rAlt = rByte;
+            var gAlt = gByte;
+            var bAlt = bByte;
+
+            if (rByte < byte.MaxValue)
+                rAlt++;
+            else rAlt--;
+
+            if (gByte < byte.MaxValue)
+                gAlt++;
+            else gAlt--;
+
+            if (bByte < byte.MaxValue)
+                bAlt++;
+            else bAlt--;
+
+            int i = 0;
+
+            if (bakedTexture == null) return;
+
+            // bakedTexture is set during Bake() with a ManagedImage; assert non-null here for static analysis
+            var img = bakedTexture.Image!;
+            byte[] red = img.Red!;
+            byte[] green = img.Green!;
+            byte[] blue = img.Blue!;
+            byte[] alpha = img.Alpha!;
+            byte[] bump = img.Bump!;
+
+            for (int y = 0; y < bakeHeight; y++)
+            {
+                for (int x = 0; x < bakeWidth; x++)
+                {
+                    if (((x ^ y) & 0x10) == 0)
+                    {
+                        red[i] = rAlt;
+                        green[i] = gByte;
+                        blue[i] = bByte;
+                        alpha[i] = byte.MaxValue;
+                        bump[i] = 0;
+                    }
+                    else
+                    {
+                        red[i] = rByte;
+                        green[i] = gAlt;
+                        blue[i] = bAlt;
+                        alpha[i] = byte.MaxValue;
+                        bump[i] = 0;
+                    }
+
+                    ++i;
+                }
+            }
+
+        }
+        #endregion
+    }
+}
+

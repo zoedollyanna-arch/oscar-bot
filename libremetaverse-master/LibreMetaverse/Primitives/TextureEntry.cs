@@ -1,0 +1,1463 @@
+/*
+ * Copyright (c) 2006-2016, openmetaverse.co
+ * Copyright (c) 2025, Sjofn LLC.
+ * All rights reserved.
+ *
+ * - Redistribution and use in source and binary forms, with or without 
+ *   modification, are permitted provided that the following conditions are met:
+ *
+ * - Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
+ * - Neither the name of the openmetaverse.co nor the names 
+ *   of its contributors may be used to endorse or promote products derived from
+ *   this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
+using System.IO;
+using System.Linq;
+using LibreMetaverse.StructuredData;
+
+namespace LibreMetaverse
+{
+    #region Enumerations
+
+    /// <summary>
+    /// The type of bump-mapping applied to a face
+    /// </summary>
+    public enum Bumpiness : byte
+    {
+        /// <summary></summary>
+        None = 0,
+        /// <summary></summary>
+        Brightness = 1,
+        /// <summary></summary>
+        Darkness = 2,
+        /// <summary></summary>
+        Woodgrain = 3,
+        /// <summary></summary>
+        Bark = 4,
+        /// <summary></summary>
+        Bricks = 5,
+        /// <summary></summary>
+        Checker = 6,
+        /// <summary></summary>
+        Concrete = 7,
+        /// <summary></summary>
+        Crustytile = 8,
+        /// <summary></summary>
+        Cutstone = 9,
+        /// <summary></summary>
+        Discs = 10,
+        /// <summary></summary>
+        Gravel = 11,
+        /// <summary></summary>
+        Petridish = 12,
+        /// <summary></summary>
+        Siding = 13,
+        /// <summary></summary>
+        Stonetile = 14,
+        /// <summary></summary>
+        Stucco = 15,
+        /// <summary></summary>
+        Suction = 16,
+        /// <summary></summary>
+        Weave = 17
+    }
+
+    /// <summary>
+    /// The level of shininess applied to a face
+    /// </summary>
+    public enum Shininess : byte
+    {
+        /// <summary></summary>
+        None = 0,
+        /// <summary></summary>
+        Low = 0x40,
+        /// <summary></summary>
+        Medium = 0x80,
+        /// <summary></summary>
+        High = 0xC0
+    }
+
+    /// <summary>
+    /// The texture mapping style used for a face
+    /// </summary>
+    public enum MappingType : byte
+    {
+        /// <summary></summary>
+        Default = 0,
+        /// <summary></summary>
+        Planar = 2,
+        /// <summary></summary>
+        Spherical = 4,
+        /// <summary></summary>
+        Cylindrical = 6
+    }
+
+    /// <summary>
+    /// Flags in the TextureEntry block that describe which properties are 
+    /// set
+    /// </summary>
+    [Flags]
+    public enum TextureAttributes : uint
+    {
+        /// <summary></summary>
+        None = 0,
+        /// <summary></summary>
+        TextureID = 1 << 0,
+        /// <summary></summary>
+        RGBA = 1 << 1,
+        /// <summary></summary>
+        RepeatU = 1 << 2,
+        /// <summary></summary>
+        RepeatV = 1 << 3,
+        /// <summary></summary>
+        OffsetU = 1 << 4,
+        /// <summary></summary>
+        OffsetV = 1 << 5,
+        /// <summary></summary>
+        Rotation = 1 << 6,
+        /// <summary></summary>
+        Material = 1 << 7,
+        /// <summary></summary>
+        Media = 1 << 8,
+        /// <summary></summary>
+        Glow = 1 << 9,
+        /// <summary></summary>
+        MaterialID = 1 << 10,
+        /// <summary>PBR / GLTF render material ID</summary>
+        RenderMaterialID = 1 << 11,
+        /// <summary></summary>
+        All = 0xFFFFFFFF
+    }
+
+    #endregion Enumerations
+
+    public partial class Primitive
+    {
+        #region Enums
+
+        /// <summary>
+        /// Texture animation mode
+        /// </summary>
+        [Flags]
+        public enum TextureAnimMode : uint
+        {
+            /// <summary>Disable texture animation</summary>
+            ANIM_OFF = 0x00,
+            /// <summary>Enable texture animation</summary>
+            ANIM_ON = 0x01,
+            /// <summary>Loop when animating textures</summary>
+            LOOP = 0x02,
+            /// <summary>Animate in reverse direction</summary>
+            REVERSE = 0x04,
+            /// <summary>Animate forward then reverse</summary>
+            PING_PONG = 0x08,
+            /// <summary>Slide texture smoothly instead of frame-stepping</summary>
+            SMOOTH = 0x10,
+            /// <summary>Rotate texture instead of using frames</summary>
+            ROTATE = 0x20,
+            /// <summary>Scale texture instead of using frames</summary>
+            SCALE = 0x40,
+        }
+
+        #endregion Enums
+
+        #region Subclasses
+
+        /// <summary>
+        /// A single textured face. Don't instantiate this class yourself, use the
+        /// methods in TextureEntry
+        /// </summary>
+        public class TextureEntryFace : ICloneable
+        {
+            // +----------+ S = Shiny
+            // | SSFBBBBB | F = Fullbright
+            // | 76543210 | B = Bumpmap
+            // +----------+
+            private const byte BUMP_MASK = 0x1F;
+            private const byte FULLBRIGHT_MASK = 0x20;
+            private const byte SHINY_MASK = 0xC0;
+            // +----------+ M = Media Flags (web page)
+            // | .....TTM | T = Texture Mapping
+            // | 76543210 | . = Unused
+            // +----------+
+            private const byte MEDIA_MASK = 0x01;
+            private const byte TEX_MAP_MASK = 0x06;
+
+            private Color4 rgba;
+            private float repeatU;
+            private float repeatV;
+            private float offsetU;
+            private float offsetV;
+            private float rotation;
+            private float glow;
+            private byte materialb;
+            private byte mediab;
+            private TextureAttributes hasAttribute;
+            private UUID textureID;
+            private UUID materialID;
+            private UUID renderMaterialID;
+            private TextureEntryFace? DefaultTexture;
+
+
+            #region Properties
+
+            public bool Valid => DefaultTexture != null;
+
+            /// <summary></summary>
+            internal byte material
+            {
+                get => (hasAttribute & TextureAttributes.Material) != 0 ? materialb : DefaultTexture!.material;
+                set
+                {
+                    materialb = value;
+                    hasAttribute |= TextureAttributes.Material;
+                }
+            }
+            
+            /// <summary></summary>
+            internal byte media
+            {
+                get => (hasAttribute & TextureAttributes.Media) != 0 ? mediab : DefaultTexture!.media;
+                set
+                {
+                    mediab = value;
+                    hasAttribute |= TextureAttributes.Media;
+                }
+            }
+            
+            /// <summary></summary>
+            public Color4 RGBA
+            {
+                get => (hasAttribute & TextureAttributes.RGBA) != 0 ? rgba : DefaultTexture!.rgba;
+                set
+                {
+                    rgba = value;
+                    hasAttribute |= TextureAttributes.RGBA;
+                }
+            }
+
+            /// <summary></summary>
+            public float RepeatU
+            {
+                get => (hasAttribute & TextureAttributes.RepeatU) != 0 ? repeatU : DefaultTexture!.repeatU;
+                set
+                {
+                    repeatU = value;
+                    hasAttribute |= TextureAttributes.RepeatU;
+                }
+            }
+
+            /// <summary></summary>
+            public float RepeatV
+            {
+                get => (hasAttribute & TextureAttributes.RepeatV) != 0 ? repeatV : DefaultTexture!.repeatV;
+                set
+                {
+                    repeatV = value;
+                    hasAttribute |= TextureAttributes.RepeatV;
+                }
+            }
+
+            /// <summary></summary>
+            public float OffsetU
+            {
+                get => (hasAttribute & TextureAttributes.OffsetU) != 0 ? offsetU : DefaultTexture!.offsetU;
+                set
+                {
+                    offsetU = value;
+                    hasAttribute |= TextureAttributes.OffsetU;
+                }
+            }
+
+            /// <summary></summary>
+            public float OffsetV
+            {
+                get => (hasAttribute & TextureAttributes.OffsetV) != 0 ? offsetV : DefaultTexture!.offsetV;
+                set
+                {
+                    offsetV = value;
+                    hasAttribute |= TextureAttributes.OffsetV;
+                }
+            }
+
+            /// <summary></summary>
+            public float Rotation
+            {
+                get => (hasAttribute & TextureAttributes.Rotation) != 0 ? rotation : DefaultTexture!.rotation;
+                set
+                {
+                    rotation = value;
+                    hasAttribute |= TextureAttributes.Rotation;
+                }
+            }
+
+            /// <summary></summary>
+            public float Glow
+            {
+                get => (hasAttribute & TextureAttributes.Glow) != 0 ? glow : DefaultTexture!.glow;
+                set
+                {
+                    glow = value;
+                    hasAttribute |= TextureAttributes.Glow;
+                }
+            }
+
+            /// <summary></summary>
+            public Bumpiness Bump
+            {
+                get
+                {
+                    if ((hasAttribute & TextureAttributes.Material) != 0)
+                        return (Bumpiness)(material & BUMP_MASK);
+                        else
+                            return DefaultTexture!.Bump;
+                }
+                set
+                {
+                    // Clear out the old material value
+                    material &= 0xE0;
+                    // Put the new bump value in the material byte
+                    material |= (byte)value;
+                    hasAttribute |= TextureAttributes.Material;
+                }
+            }
+
+            public Shininess Shiny
+            {
+                get
+                {
+                    if ((hasAttribute & TextureAttributes.Material) != 0)
+                        return (Shininess)(material & SHINY_MASK);
+                        else
+                            return DefaultTexture!.Shiny;
+                }
+                set
+                {
+                    // Clear out the old shiny value
+                    material &= 0x3F;
+                    // Put the new shiny value in the material byte
+                    material |= (byte)value;
+                    hasAttribute |= TextureAttributes.Material;
+                }
+            }
+
+            public bool Fullbright
+            {
+                get
+                {
+                    if ((hasAttribute & TextureAttributes.Material) != 0)
+                        return (material & FULLBRIGHT_MASK) != 0;
+                        else
+                            return DefaultTexture!.Fullbright;
+                }
+                set
+                {
+                    // Clear out the old fullbright value
+                    material &= 0xDF;
+                    if (value)
+                    {
+                        material |= 0x20;
+                        hasAttribute |= TextureAttributes.Material;
+                    }
+                }
+            }
+
+            /// <summary>In the future this will specify whether a webpage is
+            /// attached to this face</summary>
+            public bool MediaFlags
+            {
+                get
+                {
+                    if ((hasAttribute & TextureAttributes.Media) != 0)
+                        return (media & MEDIA_MASK) != 0;
+                        else
+                            return DefaultTexture!.MediaFlags;
+                }
+                set
+                {
+                    // Clear out the old mediaflags value
+                    media &= 0xFE;
+                    if (value)
+                    {
+                        media |= 0x01;
+                        hasAttribute |= TextureAttributes.Media;
+                    }
+                }
+            }
+
+            public MappingType TexMapType
+            {
+                get
+                {
+                    if ((hasAttribute & TextureAttributes.Media) != 0)
+                        return (MappingType)(media & TEX_MAP_MASK);
+                        else
+                            return DefaultTexture!.TexMapType;
+                }
+                set
+                {
+                    // Clear out the old texmap value
+                    media &= 0xF9;
+                    // Put the new texmap value in the media byte
+                    media |= (byte)value;
+                    hasAttribute |= TextureAttributes.Media;
+                }
+            }
+
+            /// <summary></summary>
+            public UUID TextureID
+            {
+                get => (hasAttribute & TextureAttributes.TextureID) != 0 ? textureID : (DefaultTexture?.textureID ?? UUID.Zero);
+                set
+                {
+                    textureID = value;
+                    hasAttribute |= TextureAttributes.TextureID;
+                }
+            }
+
+            /// <summary></summary>
+            public UUID MaterialID
+            {
+                get => (hasAttribute & TextureAttributes.MaterialID) != 0 ? materialID : (DefaultTexture?.materialID ?? UUID.Zero);
+                set
+                {
+                    materialID = value;
+                    hasAttribute |= TextureAttributes.MaterialID;
+                }
+            }
+
+            /// <summary>PBR / GLTF render material asset UUID for this face.</summary>
+            public UUID RenderMaterialID
+            {
+                get => (hasAttribute & TextureAttributes.RenderMaterialID) != 0 ? renderMaterialID : (DefaultTexture?.renderMaterialID ?? UUID.Zero);
+                set
+                {
+                    renderMaterialID = value;
+                    hasAttribute |= TextureAttributes.RenderMaterialID;
+                }
+            }
+
+            #endregion Properties
+
+            /// <summary>
+            /// Contains the definition for individual faces
+            /// </summary>
+            /// <param name="defaultTexture"></param>
+            public TextureEntryFace(TextureEntryFace? defaultTexture)
+            {
+                rgba = Color4.White;
+                repeatU = 1.0f;
+                repeatV = 1.0f;
+
+                DefaultTexture = defaultTexture;
+                hasAttribute = DefaultTexture == null ? TextureAttributes.All : TextureAttributes.None;
+            }
+
+            public OSD GetOSD(int faceNumber)
+            {
+                OSDMap tex = new OSDMap(10);
+                if (faceNumber >= 0) tex["face_number"] = OSD.FromInteger(faceNumber);
+                tex["colors"] = OSD.FromColor4(RGBA);
+                tex["scales"] = OSD.FromReal(RepeatU);
+                tex["scalet"] = OSD.FromReal(RepeatV);
+                tex["offsets"] = OSD.FromReal(OffsetU);
+                tex["offsett"] = OSD.FromReal(OffsetV);
+                tex["imagerot"] = OSD.FromReal(Rotation);
+                tex["bump"] = OSD.FromInteger((int)Bump);
+                tex["shiny"] = OSD.FromInteger((int)Shiny);
+                tex["fullbright"] = OSD.FromBoolean(Fullbright);
+                tex["media_flags"] = OSD.FromInteger(Convert.ToInt32(MediaFlags));
+                tex["mapping"] = OSD.FromInteger((int)TexMapType);
+                tex["glow"] = OSD.FromReal(Glow);
+
+                if (TextureID != Primitive.TextureEntry.WHITE_TEXTURE)
+                    tex["imageid"] = OSD.FromUUID(TextureID);
+                else
+                    tex["imageid"] = OSD.FromUUID(UUID.Zero);
+
+                tex["materialid"] = OSD.FromUUID(materialID);
+                tex["rendermaterialid"] = OSD.FromUUID(renderMaterialID);
+
+                return tex;
+            }
+
+            public static TextureEntryFace FromOSD(OSD osd, TextureEntryFace? defaultFace, out int faceNumber)
+            {
+                OSDMap map = (OSDMap)osd;
+
+                TextureEntryFace face = new TextureEntryFace(defaultFace);
+                faceNumber = (map.ContainsKey("face_number")) ? map["face_number"].AsInteger() : -1;
+                var rgba = ((OSDArray)map["colors"]).AsColor4();
+                face.RGBA = rgba;
+                face.RepeatU = (float)map["scales"].AsReal();
+                face.RepeatV = (float)map["scalet"].AsReal();
+                face.OffsetU = (float)map["offsets"].AsReal();
+                face.OffsetV = (float)map["offsett"].AsReal();
+                face.Rotation = (float)map["imagerot"].AsReal();
+                face.Bump = (Bumpiness)map["bump"].AsInteger();
+                face.Shiny = (Shininess)map["shiny"].AsInteger();
+                face.Fullbright = map["fullbright"].AsBoolean();
+                face.MediaFlags = map["media_flags"].AsBoolean();
+                face.TexMapType = (MappingType)map["mapping"].AsInteger();
+                face.Glow = (float)map["glow"].AsReal();
+                face.TextureID = map["imageid"].AsUUID();
+                face.MaterialID = map["materialid"].AsUUID();
+                if (map.ContainsKey("rendermaterialid"))
+                    face.RenderMaterialID = map["rendermaterialid"].AsUUID();
+                return face;
+            }
+
+            public object Clone()
+            {
+                TextureEntryFace? clonedDefault = DefaultTexture == null ? null : (TextureEntryFace)DefaultTexture.Clone();
+                TextureEntryFace ret = new TextureEntryFace(clonedDefault)
+                {
+                    rgba = rgba,
+                    repeatU = repeatU,
+                    repeatV = repeatV,
+                    offsetU = offsetU,
+                    offsetV = offsetV,
+                    rotation = rotation,
+                    glow = glow,
+                    materialb = materialb,
+                    mediab = mediab,
+                    hasAttribute = hasAttribute,
+                    textureID = textureID,
+                    materialID = materialID,
+                    renderMaterialID = renderMaterialID
+                };
+                return ret;
+            }
+
+            public override int GetHashCode()
+            {
+                return
+                    RGBA.GetHashCode() ^
+                    RepeatU.GetHashCode() ^
+                    RepeatV.GetHashCode() ^
+                    OffsetU.GetHashCode() ^
+                    OffsetV.GetHashCode() ^
+                    Rotation.GetHashCode() ^
+                    Glow.GetHashCode() ^
+                    Bump.GetHashCode() ^
+                    Shiny.GetHashCode() ^
+                    Fullbright.GetHashCode() ^
+                    MediaFlags.GetHashCode() ^
+                    TexMapType.GetHashCode() ^
+                    TextureID.GetHashCode() ^
+                    MaterialID.GetHashCode() ^
+                    RenderMaterialID.GetHashCode();
+            }
+
+            /// <summary>
+            /// 
+            /// </summary>
+            /// <returns></returns>
+            public override string ToString()
+            {
+                return $"Color: {RGBA} RepeatU: {RepeatU} RepeatV: {RepeatV} OffsetU: {OffsetU} OffsetV: {OffsetV} " +
+                    $"Rotation: {Rotation} Bump: {Bump} Shiny: {Shiny} Fullbright: {Fullbright} Mapping: {TexMapType} Media: {MediaFlags} Glow: {Glow} ID: {TextureID} MaterialID: {MaterialID} RenderMaterialID: {RenderMaterialID}";
+            }
+        }
+
+        /// <summary>
+        /// Represents all the texturable faces for an object
+        /// </summary>
+        /// <remarks>Grid objects have infinite faces, with each face
+        /// using the properties of the default face unless set otherwise. So if
+        /// you have a TextureEntry with a default texture uuid of X, and face 18
+        /// has a texture UUID of Y, every face would be textured with X except for
+        /// face 18 that uses Y. In practice however, primitives utilize a maximum
+        /// of nine faces</remarks>
+        public class TextureEntry
+        {
+            public const int MAX_FACES = 45;
+            public static readonly UUID WHITE_TEXTURE = new UUID("5748decc-f629-461c-9a36-a35a221fe21f");
+
+            /// <summary></summary>
+            public TextureEntryFace? DefaultTexture;
+            /// <summary></summary>
+            public TextureEntryFace[] FaceTextures = new TextureEntryFace[MAX_FACES];
+
+            /// <summary>
+            /// Constructor that takes a default texture UUID
+            /// </summary>
+            /// <param name="defaultTextureID">Texture UUID to use as the default texture</param>
+            public TextureEntry(UUID defaultTextureID)
+            {
+                DefaultTexture = new TextureEntryFace(null) {TextureID = defaultTextureID};
+            }
+
+            /// <summary>
+            /// Constructor that takes a <see cref="TextureEntryFace" /> for the
+            /// default face
+            /// </summary>
+            /// <param name="defaultFace">Face to use as the default face</param>
+            public TextureEntry(TextureEntryFace defaultFace)
+            {
+                DefaultTexture = new TextureEntryFace(null)
+                {
+                    Bump = defaultFace.Bump,
+                    Fullbright = defaultFace.Fullbright,
+                    MediaFlags = defaultFace.MediaFlags,
+                    OffsetU = defaultFace.OffsetU,
+                    OffsetV = defaultFace.OffsetV,
+                    RepeatU = defaultFace.RepeatU,
+                    RepeatV = defaultFace.RepeatV,
+                    RGBA = defaultFace.RGBA,
+                    Rotation = defaultFace.Rotation,
+                    Glow = defaultFace.Glow,
+                    Shiny = defaultFace.Shiny,
+                    TexMapType = defaultFace.TexMapType,
+                    TextureID = defaultFace.TextureID,
+                    MaterialID = defaultFace.MaterialID,
+                    RenderMaterialID = defaultFace.RenderMaterialID
+                };
+            }
+
+            /// <summary>
+            /// Copy constructor — performs a deep clone of an existing TextureEntry
+            /// </summary>
+            /// <param name="source">TextureEntry to copy</param>
+            public TextureEntry(TextureEntry source)
+            {
+                DefaultTexture = source.DefaultTexture != null
+                    ? (TextureEntryFace)source.DefaultTexture.Clone()
+                    : null;
+
+                for (int i = 0; i < MAX_FACES; i++)
+                {
+                    if (source.FaceTextures[i] != null)
+                        FaceTextures[i] = (TextureEntryFace)source.FaceTextures[i].Clone();
+                }
+            }
+
+            /// <summary>
+            /// Constructor that creates the TextureEntry class from a byte array
+            /// </summary>
+            /// <param name="data">Byte array containing the TextureEntry field</param>
+            /// <param name="pos">Starting position of the TextureEntry field in 
+            /// the byte array</param>
+            /// <param name="length">Length of the TextureEntry field, in bytes</param>
+            public TextureEntry(byte[] data, int pos, int length)
+            {
+                FromBytes(data, pos, length);
+            }
+
+            /// <summary>
+            /// This will either create a new face if a custom face for the given
+            /// index is not defined, or return the custom face for that index if
+            /// it already exists
+            /// </summary>
+            /// <param name="index">The index number of the face to create or 
+            /// retrieve</param>
+            /// <returns>A TextureEntryFace containing all the properties for that
+            /// face</returns>
+            public TextureEntryFace CreateFace(uint index)
+            {
+                if (index >= MAX_FACES) throw new Exception(index + " is outside the range of MAX_FACES");
+
+                return FaceTextures[index] ?? (FaceTextures[index] = new TextureEntryFace(this.DefaultTexture));
+            }
+
+            /// <summary>
+            /// 
+            /// </summary>
+            /// <param name="index"></param>
+            /// <returns></returns>
+            public TextureEntryFace GetFace(uint index)
+            {
+                if (index >= MAX_FACES) throw new Exception(index + " is outside the range of MAX_FACES");
+
+                return FaceTextures[index] ?? DefaultTexture!;
+            }
+
+            /// <summary>
+            /// 
+            /// </summary>
+            /// <returns></returns>
+            public OSD GetOSD()
+            {
+                OSDArray array = new OSDArray();
+
+                // If DefaultTexture is null, assume the whole TextureEntry is empty
+                if (DefaultTexture == null)
+                    return array;
+
+                // Otherwise, always add default texture
+                array.Add(DefaultTexture.GetOSD(-1));
+
+                for (int i = 0; i < MAX_FACES; i++)
+                {
+                    if (FaceTextures[i] != null)
+                        array.Add(FaceTextures[i].GetOSD(i));
+                }
+
+                return array;
+            }
+
+            public static TextureEntry FromOSD(OSD osd)
+            {
+                if (osd.Type == OSDType.Array)
+                {
+                    OSDArray array = (OSDArray)osd;
+                    OSDMap faceSD;
+
+                    if (array.Count > 0)
+                    {
+                        int faceNumber;
+                        faceSD = (OSDMap)array[0];
+                        TextureEntryFace defaultFace = TextureEntryFace.FromOSD(faceSD, null, out faceNumber);
+                        TextureEntry te = new TextureEntry(defaultFace);
+
+                        for (int i = 1; i < array.Count; i++)
+                        {
+                            TextureEntryFace tex = TextureEntryFace.FromOSD(array[i], defaultFace, out faceNumber);
+                            if (faceNumber >= 0 && faceNumber < te.FaceTextures.Length)
+                                te.FaceTextures[faceNumber] = tex;
+                        }
+
+                        return te;
+                    }
+                }
+
+                return new TextureEntry(UUID.Zero);
+            }
+
+            private void FromBytes(byte[] data, int pos, int length)
+            {
+                DefaultTexture = new TextureEntryFace(null);
+
+                if (length < 16)
+                    // No TextureEntry to process
+                    return;
+
+                uint bitfieldSize = 0;
+                UInt64 faceBits = 0;
+                int i = pos;
+
+                #region Texture
+                DefaultTexture.TextureID = new UUID(data, i);
+                i += 16;
+                
+                while (ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                {
+                    UUID tmpUUID = new UUID(data, i);
+                    i += 16;
+                    
+                    for (uint face = 0; face < bitfieldSize; face++)
+                    {
+                        if ((faceBits & (1UL << (int)face)) != 0)
+                            CreateFace(face).TextureID = tmpUUID;
+                    }
+                }
+                #endregion Texture
+
+                #region Color
+                DefaultTexture.RGBA = new Color4(data, i, true);
+                i += 4;
+
+                while (ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                {
+                    Color4 tmpColor = new Color4(data, i, true);
+                    i += 4;
+
+                    for (uint face = 0; face < bitfieldSize; face++)
+                    {
+                        if ((faceBits & (1UL << (int)face)) != 0)
+                            CreateFace(face).RGBA = tmpColor;
+                    }
+                }
+                #endregion Color
+
+                #region RepeatU
+                DefaultTexture.RepeatU = Utils.BytesToFloat(data, i);
+                i += 4;
+
+                while (ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                {
+                    float tmpFloat = Utils.BytesToFloat(data, i);
+                    i += 4;
+
+                    for (uint face = 0; face < bitfieldSize; face++)
+                    {
+                        if ((faceBits & (1UL << (int)face)) != 0)
+                            CreateFace(face).RepeatU = tmpFloat;
+                    }
+                }
+                #endregion RepeatU
+
+                #region RepeatV
+                DefaultTexture.RepeatV = Utils.BytesToFloat(data, i);
+                i += 4;
+
+                while (ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                {
+                    float tmpFloat = Utils.BytesToFloat(data, i);
+                    i += 4;
+
+                    for (uint face = 0; face < bitfieldSize; face++)
+                    {
+                        if ((faceBits & (1UL << (int)face)) != 0)
+                            CreateFace(face).RepeatV = tmpFloat;
+                    }
+                }
+                #endregion RepeatV
+
+                #region OffsetU
+                DefaultTexture.OffsetU = Helpers.TEOffsetFloat(data, i);
+                i += 2;
+
+                while (ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                {
+                    float tmpFloat = Helpers.TEOffsetFloat(data, i);
+                    i += 2;
+
+                    for (uint face = 0; face < bitfieldSize; face++)
+                    {
+                        if ((faceBits & (1UL << (int)face)) != 0)
+                            CreateFace(face).OffsetU = tmpFloat;
+                    }
+                }
+                #endregion OffsetU
+
+                #region OffsetV
+                DefaultTexture.OffsetV = Helpers.TEOffsetFloat(data, i);
+                i += 2;
+
+                while (ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                {
+                    float tmpFloat = Helpers.TEOffsetFloat(data, i);
+                    i += 2;
+
+                    for (uint face = 0; face < bitfieldSize; face++)
+                    {
+                        if ((faceBits & (1UL << (int)face)) != 0)
+                            CreateFace(face).OffsetV = tmpFloat;
+                    }
+                }
+                #endregion OffsetV
+
+                #region Rotation
+                DefaultTexture.Rotation = Helpers.TERotationFloat(data, i);
+                i += 2;
+
+                while (ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                {
+                    float tmpFloat = Helpers.TERotationFloat(data, i);
+                    i += 2;
+
+                    for (uint face = 0; face < bitfieldSize; face++)
+                    {
+                        if ((faceBits & (1UL << (int)face)) != 0)
+                            CreateFace(face).Rotation = tmpFloat;
+                    }
+                }
+                #endregion Rotation
+
+                #region Material
+                DefaultTexture.material = data[i];
+                i++;
+
+                while (ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                {
+                    byte tmpByte = data[i];
+                    i++;
+
+                    for (uint face = 0; face < bitfieldSize; face++)
+                    {
+                        if ((faceBits & (1UL << (int)face)) != 0)
+                            CreateFace(face).material = tmpByte;
+                    }
+                }
+                #endregion Material
+
+                #region Media
+                DefaultTexture.media = data[i];
+                i++;
+
+                while (i - pos < length && ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                {
+                    byte tmpByte = data[i];
+                    i++;
+
+                    for (uint face = 0; face < bitfieldSize; face++)
+                    {
+                        if ((faceBits & (1UL << (int)face)) != 0)
+                            CreateFace(face).media = tmpByte;
+                    }
+                }
+                #endregion Media
+
+                #region Glow
+                DefaultTexture.Glow = Helpers.TEGlowFloat(data, i);
+                i++;
+
+                while (ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                {
+                    float tmpFloat = Helpers.TEGlowFloat(data, i);
+                    i++;
+
+                    for (uint face = 0; face < bitfieldSize; face++)
+                    {
+                        if ((faceBits & (1UL << (int)face)) != 0)
+                            CreateFace(face).Glow = tmpFloat;
+                    }
+                }
+ 	  	        #endregion Glow
+
+                #region MaterialID
+                if (i - pos + 16 <= length)
+                {
+                    DefaultTexture.MaterialID = new UUID(data, i);
+                    i += 16;
+
+                    while (i - pos + 16 <= length && ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                    {
+                        UUID tmpUUID = new UUID(data, i);
+                        i += 16;
+
+                        for (uint face = 0; face < bitfieldSize; face++)
+                        {
+                            if ((faceBits & (1UL << (int)face)) != 0)
+                                CreateFace(face).MaterialID = tmpUUID;
+                        }
+                    }
+                }
+                #endregion MaterialID
+
+                #region RenderMaterialID
+                if (i - pos + 16 <= length)
+                {
+                    DefaultTexture.RenderMaterialID = new UUID(data, i);
+                    i += 16;
+
+                    while (i - pos + 16 <= length && ReadFaceBitfield(data, ref i, ref faceBits, ref bitfieldSize))
+                    {
+                        UUID tmpUUID = new UUID(data, i);
+                        i += 16;
+
+                        for (uint face = 0; face < bitfieldSize; face++)
+                        {
+                            if ((faceBits & (1UL << (int)face)) != 0)
+                                CreateFace(face).RenderMaterialID = tmpUUID;
+                        }
+                    }
+                }
+                #endregion RenderMaterialID
+            }
+
+            /// <summary>
+            /// 
+            /// </summary>
+            /// <returns></returns>
+            public byte[] GetBytes()
+            {
+                if (DefaultTexture == null) { return Utils.EmptyBytes; }
+
+                using (MemoryStream memStream = new MemoryStream())
+                {
+                    using (BinaryWriter binWriter = new BinaryWriter(memStream))
+                    {
+                        #region Bitfield Setup
+
+                        ulong[] textures = new ulong[FaceTextures.Length];
+                        InitializeArray(ref textures);
+                        ulong[] rgbas = new ulong[FaceTextures.Length];
+                        InitializeArray(ref rgbas);
+                        ulong[] repeatus = new ulong[FaceTextures.Length];
+                        InitializeArray(ref repeatus);
+                        ulong[] repeatvs = new ulong[FaceTextures.Length];
+                        InitializeArray(ref repeatvs);
+                        ulong[] offsetus = new ulong[FaceTextures.Length];
+                        InitializeArray(ref offsetus);
+                        ulong[] offsetvs = new ulong[FaceTextures.Length];
+                        InitializeArray(ref offsetvs);
+                        ulong[] rotations = new ulong[FaceTextures.Length];
+                        InitializeArray(ref rotations);
+                        ulong[] materials = new ulong[FaceTextures.Length];
+                        InitializeArray(ref materials);
+                        ulong[] medias = new ulong[FaceTextures.Length];
+                        InitializeArray(ref medias);
+                        ulong[] glows = new ulong[FaceTextures.Length];
+                        InitializeArray(ref glows);
+                        ulong[] materialIDs = new ulong[FaceTextures.Length];
+                        InitializeArray(ref materialIDs);
+                        ulong[] renderMaterialIDs = new ulong[FaceTextures.Length];
+                        InitializeArray(ref renderMaterialIDs);
+
+                        for (int i = 0; i < FaceTextures.Length; i++)
+                        {
+                            if (FaceTextures[i] == null) continue;
+
+                            if (FaceTextures[i].TextureID != DefaultTexture.TextureID)
+                            {
+                                if (textures[i] == ulong.MaxValue) textures[i] = 0;
+                                textures[i] |= (1UL << i);
+                            }
+                            if (FaceTextures[i].RGBA != DefaultTexture.RGBA)
+                            {
+                                if (rgbas[i] == ulong.MaxValue) rgbas[i] = 0;
+                                rgbas[i] |= (1UL << i);
+                            }
+                            if (FaceTextures[i].RepeatU != DefaultTexture.RepeatU)
+                            {
+                                if (repeatus[i] == ulong.MaxValue) repeatus[i] = 0;
+                                repeatus[i] |= (1UL << i);
+                            }
+                            if (FaceTextures[i].RepeatV != DefaultTexture.RepeatV)
+                            {
+                                if (repeatvs[i] == ulong.MaxValue) repeatvs[i] = 0;
+                                repeatvs[i] |= (1UL << i);
+                            }
+                            if (Helpers.TEOffsetShort(FaceTextures[i].OffsetU) != Helpers.TEOffsetShort(DefaultTexture.OffsetU))
+                            {
+                                if (offsetus[i] == ulong.MaxValue) offsetus[i] = 0;
+                                offsetus[i] |= (1UL << i);
+                            }
+                            if (Helpers.TEOffsetShort(FaceTextures[i].OffsetV) != Helpers.TEOffsetShort(DefaultTexture.OffsetV))
+                            {
+                                if (offsetvs[i] == ulong.MaxValue) offsetvs[i] = 0;
+                                offsetvs[i] |= (1UL << i);
+                            }
+                            if (Helpers.TERotationShort(FaceTextures[i].Rotation) != Helpers.TERotationShort(DefaultTexture.Rotation))
+                            {
+                                if (rotations[i] == ulong.MaxValue) rotations[i] = 0;
+                                rotations[i] |= (1UL << i);
+                            }
+                            if (FaceTextures[i].material != DefaultTexture.material)
+                            {
+                                if (materials[i] == ulong.MaxValue) materials[i] = 0;
+                                materials[i] |= (1UL << i);
+                            }
+                            if (FaceTextures[i].media != DefaultTexture.media)
+                            {
+                                if (medias[i] == ulong.MaxValue) medias[i] = 0;
+                                medias[i] |= (1UL << i);
+                            }
+                            if (Helpers.TEGlowByte(FaceTextures[i].Glow) != Helpers.TEGlowByte(DefaultTexture.Glow))
+                            {
+                                if (glows[i] == ulong.MaxValue) glows[i] = 0;
+                                glows[i] |= (1UL << i);
+                            }
+                            if (FaceTextures[i].MaterialID != DefaultTexture.MaterialID)
+                            {
+                                if (materialIDs[i] == ulong.MaxValue) materialIDs[i] = 0;
+                                materialIDs[i] |= (1UL << i);
+                            }
+                            if (FaceTextures[i].RenderMaterialID != DefaultTexture.RenderMaterialID)
+                            {
+                                if (renderMaterialIDs[i] == ulong.MaxValue) renderMaterialIDs[i] = 0;
+                                renderMaterialIDs[i] |= (1UL << i);
+                            }
+                        }
+
+                        #endregion Bitfield Setup
+
+                        #region Texture
+                        binWriter.Write(DefaultTexture.TextureID.GetBytes());
+                        for (int i = 0; i < textures.Length; i++)
+                        {
+                            if (textures[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(textures[i]));
+                                binWriter.Write(FaceTextures[i].TextureID.GetBytes());
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion Texture
+
+                        #region Color
+                        // Serialize the color bytes inverted to optimize for zerocoding
+                        binWriter.Write(DefaultTexture.RGBA.GetBytes(true));
+                        for (int i = 0; i < rgbas.Length; i++)
+                        {
+                            if (rgbas[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(rgbas[i]));
+                                // Serialize the color bytes inverted to optimize for zerocoding
+                                binWriter.Write(FaceTextures[i].RGBA.GetBytes(true));
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion Color
+
+                        #region RepeatU
+                        binWriter.Write(DefaultTexture.RepeatU);
+                        for (int i = 0; i < repeatus.Length; i++)
+                        {
+                            if (repeatus[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(repeatus[i]));
+                                binWriter.Write(FaceTextures[i].RepeatU);
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion RepeatU
+
+                        #region RepeatV
+                        binWriter.Write(DefaultTexture.RepeatV);
+                        for (int i = 0; i < repeatvs.Length; i++)
+                        {
+                            if (repeatvs[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(repeatvs[i]));
+                                binWriter.Write(FaceTextures[i].RepeatV);
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion RepeatV
+
+                        #region OffsetU
+                        binWriter.Write(Helpers.TEOffsetShort(DefaultTexture.OffsetU));
+                        for (int i = 0; i < offsetus.Length; i++)
+                        {
+                            if (offsetus[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(offsetus[i]));
+                                binWriter.Write(Helpers.TEOffsetShort(FaceTextures[i].OffsetU));
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion OffsetU
+
+                        #region OffsetV
+                        binWriter.Write(Helpers.TEOffsetShort(DefaultTexture.OffsetV));
+                        for (int i = 0; i < offsetvs.Length; i++)
+                        {
+                            if (offsetvs[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(offsetvs[i]));
+                                binWriter.Write(Helpers.TEOffsetShort(FaceTextures[i].OffsetV));
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion OffsetV
+
+                        #region Rotation
+                        binWriter.Write(Helpers.TERotationShort(DefaultTexture.Rotation));
+                        for (int i = 0; i < rotations.Length; i++)
+                        {
+                            if (rotations[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(rotations[i]));
+                                binWriter.Write(Helpers.TERotationShort(FaceTextures[i].Rotation));
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion Rotation
+
+                        #region Material
+                        binWriter.Write(DefaultTexture.material);
+                        for (int i = 0; i < materials.Length; i++)
+                        {
+                            if (materials[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(materials[i]));
+                                binWriter.Write(FaceTextures[i].material);
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion Material
+
+                        #region Media
+                        binWriter.Write(DefaultTexture.media);
+                        for (int i = 0; i < medias.Length; i++)
+                        {
+                            if (medias[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(medias[i]));
+                                binWriter.Write(FaceTextures[i].media);
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion Media
+
+                        #region Glow
+                        binWriter.Write(Helpers.TEGlowByte(DefaultTexture.Glow));
+                        for (int i = 0; i < glows.Length; i++)
+                        {
+                            if (glows[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(glows[i]));
+                                binWriter.Write(Helpers.TEGlowByte(FaceTextures[i].Glow));
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion Glow
+
+                        #region MaterialID
+                        binWriter.Write(DefaultTexture.MaterialID.GetBytes());
+                        for (int i = 0; i < materialIDs.Length; i++)
+                        {
+                            if (materialIDs[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(materialIDs[i]));
+                                binWriter.Write(FaceTextures[i].MaterialID.GetBytes());
+                            }
+                        }
+                        binWriter.Write((byte)0);
+                        #endregion MaterialID
+
+                        #region RenderMaterialID
+                        binWriter.Write(DefaultTexture.RenderMaterialID.GetBytes());
+                        for (int i = 0; i < renderMaterialIDs.Length; i++)
+                        {
+                            if (renderMaterialIDs[i] != ulong.MaxValue)
+                            {
+                                binWriter.Write(GetFaceBitfieldBytes(renderMaterialIDs[i]));
+                                binWriter.Write(FaceTextures[i].RenderMaterialID.GetBytes());
+                            }
+                        }
+                        #endregion RenderMaterialID
+
+                        return memStream.ToArray();
+                    }
+                }
+            }
+
+            public override int GetHashCode()
+            {
+                int hashCode = DefaultTexture != null ? DefaultTexture.GetHashCode() : 0;
+                return FaceTextures.Where(texture => texture != null)
+                        .Aggregate(hashCode, (current, texture) => current ^ texture.GetHashCode());
+            }
+
+            /// <summary>
+            /// 
+            /// </summary>
+            /// <returns></returns>
+            public override string ToString()
+            {
+                string output = string.Empty;
+
+                output += "Default Face: " + DefaultTexture + Environment.NewLine;
+
+                for (int i = 0; i < FaceTextures.Length; i++)
+                {
+                    if (FaceTextures[i] != null)
+                        output += "Face " + i + ": " + FaceTextures[i] + Environment.NewLine;
+                }
+
+                return output;
+            }
+
+            #region Helpers
+
+            private void InitializeArray(ref ulong[] array)
+            {
+                for (int i = 0; i < array.Length; i++)
+                    array[i] = ulong.MaxValue;
+            }
+
+            private bool ReadFaceBitfield(byte[] data, ref int pos, ref UInt64 faceBits, ref uint bitfieldSize)
+            {
+                faceBits = 0;
+                bitfieldSize = 0;
+
+                if (pos >= data.Length)
+                    return false;
+
+                byte b = 0;
+                do
+                {
+                    b = data[pos];
+                    faceBits = (faceBits << 7) | (uint)(b & 0x7F);
+                    bitfieldSize += 7;
+                    pos++;
+                }
+                while ((b & 0x80) != 0);
+
+                return (faceBits != 0);
+            }
+
+            private byte[] GetFaceBitfieldBytes(ulong bitfield)
+            {
+                int byteLength = 0;
+                ulong tmpBitfield = bitfield;
+                while (tmpBitfield != 0)
+                {
+                    tmpBitfield >>= 7;
+                    byteLength++;
+                }
+
+                if (byteLength == 0)
+                    return new byte[1] { 0 };
+
+                byte[] bytes = new byte[byteLength];
+                for (int i = 0; i < byteLength; i++)
+                {
+                    bytes[i] = (byte)((bitfield >> (7 * (byteLength - i - 1))) & 0x7F);
+                    if (i < byteLength - 1)
+                        bytes[i] |= 0x80;
+                }
+                return bytes;
+            }
+
+            #endregion Helpers
+        }
+
+        /// <summary>
+        /// Controls the texture animation of a particular prim
+        /// </summary>
+        public struct TextureAnimation : IEquatable<TextureAnimation>
+        {
+            /// <summary></summary>
+            public TextureAnimMode Flags;
+            /// <summary></summary>
+            public uint Face;
+            /// <summary></summary>
+            public uint SizeX;
+            /// <summary></summary>
+            public uint SizeY;
+            /// <summary></summary>
+            public float Start;
+            /// <summary></summary>
+            public float Length;
+            /// <summary></summary>
+            public float Rate;
+
+            /// <summary>
+            /// 
+            /// </summary>
+            /// <param name="data"></param>
+            /// <param name="pos"></param>
+            public TextureAnimation(byte[] data, int pos)
+            {
+                if (data.Length >= 16)
+                {
+                    Flags = (TextureAnimMode)((uint)data[pos++]);
+                    Face = (uint)data[pos++];
+                    SizeX = (uint)data[pos++];
+                    SizeY = (uint)data[pos++];
+
+                    Start = Utils.BytesToFloat(data, pos);
+                    Length = Utils.BytesToFloat(data, pos + 4);
+                    Rate = Utils.BytesToFloat(data, pos + 8);
+                }
+                else
+                {
+                    Flags = 0;
+                    Face = 0;
+                    SizeX = 0;
+                    SizeY = 0;
+
+                    Start = 0.0f;
+                    Length = 0.0f;
+                    Rate = 0.0f;
+                }
+            }
+
+            /// <summary>
+            /// 
+            /// </summary>
+            /// <returns></returns>
+            public byte[] GetBytes()
+            {
+                byte[] data = new byte[16];
+                int pos = 0;
+
+                data[pos++] = (byte)Flags;
+                data[pos++] = (byte)Face;
+                data[pos++] = (byte)SizeX;
+                data[pos++] = (byte)SizeY;
+
+                Utils.FloatToBytes(Start).CopyTo(data, pos);
+                Utils.FloatToBytes(Length).CopyTo(data, pos + 4);
+                Utils.FloatToBytes(Rate).CopyTo(data, pos + 8);
+
+                return data;
+            }
+
+            public OSD GetOSD()
+            {
+                OSDMap map = new OSDMap();
+
+                map["face"] = OSD.FromInteger(Face);
+                map["flags"] = OSD.FromInteger((uint)Flags);
+                map["length"] = OSD.FromReal(Length);
+                map["rate"] = OSD.FromReal(Rate);
+                map["size_x"] = OSD.FromInteger(SizeX);
+                map["size_y"] = OSD.FromInteger(SizeY);
+                map["start"] = OSD.FromReal(Start);
+
+                return map;
+            }
+
+            public static TextureAnimation FromOSD(OSD osd)
+            {
+                TextureAnimation anim = new TextureAnimation();
+
+                if (osd is OSDMap map)
+                {
+                    anim.Face = map["face"].AsUInteger();
+                    anim.Flags = (TextureAnimMode)map["flags"].AsUInteger();
+                    anim.Length = (float)map["length"].AsReal();
+                    anim.Rate = (float)map["rate"].AsReal();
+                    anim.SizeX = map["size_x"].AsUInteger();
+                    anim.SizeY = map["size_y"].AsUInteger();
+                    anim.Start = (float)map["start"].AsReal();
+                }
+
+                return anim;
+            }
+
+            public bool Equals(TextureAnimation other)
+            {
+                return Flags == other.Flags 
+                       && Face == other.Face 
+                       && SizeX == other.SizeX 
+                       && SizeY == other.SizeY 
+                       && Start.Equals(other.Start) 
+                       && Length.Equals(other.Length) 
+                       && Rate.Equals(other.Rate);
+            }
+
+            public override bool Equals(object? obj)
+            {
+                return obj is TextureAnimation other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    var hashCode = (int)Flags;
+                    hashCode = (hashCode * 397) ^ (int)Face;
+                    hashCode = (hashCode * 397) ^ (int)SizeX;
+                    hashCode = (hashCode * 397) ^ (int)SizeY;
+                    hashCode = (hashCode * 397) ^ Start.GetHashCode();
+                    hashCode = (hashCode * 397) ^ Length.GetHashCode();
+                    hashCode = (hashCode * 397) ^ Rate.GetHashCode();
+                    return hashCode;
+                }
+            }
+        }
+
+        #endregion Subclasses
+
+        #region Public Members
+
+        /// <summary></summary>
+        public TextureEntry? Textures;
+        /// <summary></summary>
+        public TextureAnimation TextureAnim;
+
+        #endregion Public Members
+    }
+}

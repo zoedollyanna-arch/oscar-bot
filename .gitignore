@@ -1,4 +1,18 @@
+# Secrets
 .env
+*.env
+
+# .NET build output
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+
+# Legacy Node artifacts (Tammy is now a C# agent)
 node_modules
-data/*.csv
 *.csv
+
+# IDE
+.vs/
+.idea/
+*.user

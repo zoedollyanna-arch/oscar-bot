@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>TestClient</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <OutputPath>..\..\..\bin\</OutputPath>
+    <TargetFrameworks>net481;net8.0;net9.0;net10.0</TargetFrameworks>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <Nullable>disable</Nullable>
+    <NoWarn>$(NoWarn);CS1591;CS8632</NoWarn>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DefineConstants>TRACE;DEBUG</DefineConstants>
+    <Optimize>False</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <DebugType>pdbonly</DebugType>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>True</Optimize>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\LibreMetaverse\LibreMetaverse.csproj" />
+    <ProjectReference Include="..\..\..\LibreMetaverse.StructuredData\LibreMetaverse.StructuredData.csproj" />
+    <ProjectReference Include="..\..\..\LibreMetaverse.Types\LibreMetaverse.Types.csproj" />
+    <ProjectReference Include="..\..\..\LibreMetaverse.Voice.Vivox\LibreMetaverse.Voice.Vivox.csproj" />
+    <ProjectReference Include="..\..\..\LibreMetaverse.Imaging.Skia\LibreMetaverse.Imaging.Skia.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Pfim" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" />
+    <PackageReference Include="SkiaSharp.NativeAssets.macOS" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" />
+  </ItemGroup>
+</Project>

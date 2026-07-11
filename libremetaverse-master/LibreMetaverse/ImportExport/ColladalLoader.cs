@@ -1,0 +1,748 @@
+/*
+ * Copyright (c) 2006-2016, openmetaverse.co
+ * Copyright (c) 2021-2025, Sjofn LLC.
+ * All rights reserved.
+ *
+ * - Redistribution and use in source and binary forms, with or without 
+ *   modification, are permitted provided that the following conditions are met:
+ *
+ * - Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
+ * - Neither the name of the openmetaverse.co nor the names 
+ *   of its contributors may be used to endorse or promote products derived from
+ *   this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Text.RegularExpressions;
+using System.IO;
+using System.Xml;
+using System.Linq;
+using System.Xml.Serialization;
+using CoreJ2K.Configuration;
+using LibreMetaverse.Imaging;
+using LibreMetaverse.ImportExport.Collada14;
+using LibreMetaverse.Rendering;
+
+namespace LibreMetaverse.ImportExport
+{
+    /// <summary>
+    /// Parsing Collada model files into data structures
+    /// </summary>
+    public class ColladaLoader
+    {
+        private COLLADA? Model;
+        private static XmlSerializer? Serializer = null;
+        private List<Node> Nodes = new List<Node>();
+        private List<ModelMaterial> Materials = new List<ModelMaterial>();
+        private Dictionary<string, string> MatSymTarget = new Dictionary<string, string>();
+        private string FileName = string.Empty;
+        private readonly ITextureCodec? _textureCodec;
+
+        /// <summary>
+        /// Creates a new Collada loader
+        /// </summary>
+        /// <param name="textureCodec">Decodes arbitrary (non-TGA, non-J2K) image formats referenced
+        /// by the model. Reference LibreMetaverse.Imaging.Skia for a working implementation, or
+        /// provide your own. Not required for models that only reference .tga/.jp2/.j2c textures.</param>
+        public ColladaLoader(ITextureCodec? textureCodec = null)
+        {
+            _textureCodec = textureCodec;
+        }
+
+        private class Node
+        {
+            public Matrix4 Transform = Matrix4.Identity;
+            public string Name = string.Empty;
+            public string ID = string.Empty;
+            public string MeshID = string.Empty;
+        }
+
+        /// <summary>
+        /// Parses Collada document
+        /// </summary>
+        /// <param name="filename">Load .dae model from this file</param>
+        /// <param name="loadImages">Load and decode images for uploading with model</param>
+        /// <returns>A list of mesh prims that were parsed from the collada file</returns>
+        [RequiresUnreferencedCode("Uses XmlSerializer with runtime-reflected COLLADA types. Not AOT-safe.")]
+        public List<ModelPrim> Load(string filename, bool loadImages)
+        {
+            try
+            {
+                // Create an instance of the XmlSerializer specifying type and namespace.
+                if (Serializer == null)
+                {
+#pragma warning disable IL3050
+                    Serializer = new XmlSerializer(typeof(COLLADA));
+#pragma warning restore IL3050
+                }
+
+                this.FileName = filename;
+
+                // A FileStream is needed to read the XML document.
+                FileStream fs = new FileStream(filename, FileMode.Open);
+                XmlReader reader = XmlReader.Create(fs);
+#pragma warning disable IL3050
+                var des = Serializer.Deserialize(reader);
+#pragma warning restore IL3050
+                Model = des as COLLADA;
+                if (Model == null)
+                {
+                    fs.Close();
+                    throw new InvalidOperationException("Failed to deserialize COLLADA document");
+                }
+                fs.Close();
+                var prims = Parse();
+                if (loadImages)
+                {
+                    LoadImages(prims);
+                }
+                return prims;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Failed parsing collada file: " + ex.Message, ex);
+                return new List<ModelPrim>();
+            }
+        }
+
+        private void LoadImages(IEnumerable<ModelPrim> prims)
+        {
+            foreach (var prim in prims)
+            {
+                foreach (var face in prim.Faces)
+                {
+                    if (!string.IsNullOrEmpty(face.Material.Texture))
+                    {
+                        LoadImage(face.Material);
+                    }
+                }
+            }
+        }
+
+        private void LoadImage(ModelMaterial material)
+        {
+            var fname = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(FileName) ?? string.Empty, material.Texture);
+
+            try
+            {
+                string ext = System.IO.Path.GetExtension(material.Texture).ToLowerInvariant();
+
+                if (ext == ".jp2" || ext == ".j2c")
+                {
+                    material.TextureData = File.ReadAllBytes(fname);
+                    return;
+                }
+
+                ManagedImage image;
+                switch (ext)
+                {
+                    case ".tga":
+                    case ".targa":
+                        image = Targa.DecodeToManagedImage(fname);
+                        break;
+                    default:
+                        if (_textureCodec == null)
+                        {
+                            throw new InvalidOperationException(
+                                $"No ITextureCodec configured to decode '{fname}'. Reference " +
+                                "LibreMetaverse.Imaging.Skia (or provide your own ITextureCodec " +
+                                "implementation) and pass it to the ColladaLoader constructor.");
+                        }
+                        using (var fs = File.OpenRead(fname))
+                        {
+                            image = _textureCodec.Decode(fs);
+                        }
+                        break;
+                }
+
+                int width = image.Width;
+                int height = image.Height;
+
+                // Handle resizing to prevent excessively large images and irregular dimensions
+                if (!IsPowerOfTwo((uint)width) || !IsPowerOfTwo((uint)height) || width > 1024 || height > 1024)
+                {
+                    var origWidth = width;
+                    var origHieght = height;
+
+                    width = ClosestPowerOwTwo(width);
+                    height = ClosestPowerOwTwo(height);
+
+                    width = width > 1024 ? 1024 : width;
+                    height = height > 1024 ? 1024 : height;
+
+                    Logger.Info($"Image has irregular dimensions {origWidth}x{origHieght}. Resizing to {width}x{height}");
+
+                    image.ResizeBilinear(width, height);
+                }
+
+                material.TextureData = CompleteConfigurationPresets.Streaming.WithFileFormat(false).Encode(image);
+
+                Logger.Info($"Successfully encoded {fname}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Failed loading {fname}: {ex.Message}");
+            }
+
+        }
+
+        private static bool IsPowerOfTwo(uint n)
+        {
+            return (n & (n - 1)) == 0 && n != 0;
+        }
+
+        private int ClosestPowerOwTwo(int n)
+        {
+            int res = 1;
+
+            while (res < n)
+            {
+                res <<= 1;
+            }
+
+            return res > 1 ? res / 2 : 1;
+        }
+
+        private ModelMaterial ExtractMaterial(object diffuse)
+        {
+            ModelMaterial ret = new ModelMaterial();
+            if (diffuse is common_color_or_texture_typeColor color)
+            {
+                ret.DiffuseColor = new Color4(
+                    Utils.Clamp((float)color.Values[0], 0f, 1f),
+                    Utils.Clamp((float)color.Values[1], 0f, 1f),
+                    Utils.Clamp((float)color.Values[2], 0f, 1f),
+                    Utils.Clamp((float)color.Values[3], 0f, 1f));
+            }
+            else if (diffuse is common_color_or_texture_typeTexture tex)
+            {
+                ret.Texture = tex.texcoord;
+            }
+            return ret;
+
+        }
+
+        private void ParseMaterials()
+        {
+
+            if (Model == null) return;
+
+            Materials = new List<ModelMaterial>();
+
+            // Material -> effect mapping
+            var matEffect = new Dictionary<string, string>();
+            var tmpEffects = new List<ModelMaterial>();
+
+            // Image ID -> filename mapping
+            Dictionary<string, string> imgMap = new Dictionary<string, string>();
+
+            foreach (var item in Model.Items)
+            {
+                if (item is library_images images)
+                {
+                    if (images.image != null)
+                    {
+                        foreach (var image in images.image)
+                        {
+                            var img = (image)image;
+                            string ID = img.id;
+                            if (img.Item is string imgItem)
+                            {
+                                imgMap[ID] = imgItem;
+                            }
+                        }
+                    }
+                }
+            }
+
+            foreach (var item in Model.Items)
+            {
+                if (item is library_materials materials)
+                {
+                    if (materials.material != null)
+                    {
+                        foreach (var material in materials.material)
+                        {
+                            var ID = material.id;
+                            var effectUrl = material.instance_effect?.url;
+                            if (!string.IsNullOrEmpty(effectUrl))
+                            {
+                                matEffect[effectUrl!.Substring(1)] = ID;
+                            }
+                        }
+                    }
+                }
+            }
+
+            foreach (var item in Model.Items)
+            {
+                if (item is library_effects effects)
+                {
+                    if (effects.effect != null)
+                    {
+                        foreach (var effect in effects.effect)
+                        {
+                            string ID = effect.id;
+                            foreach (var effItem in effect.Items)
+                            {
+                                if (effItem is effectFx_profile_abstractProfile_COMMON common)
+                                {
+                                    var teq = common.technique;
+                                    if (teq != null)
+                                    {
+                                        if (teq.Item is effectFx_profile_abstractProfile_COMMONTechniquePhong phong)
+                                        {
+                                            if (phong.diffuse != null)
+                                            {
+                                                var material = ExtractMaterial(phong.diffuse.Item);
+                                                material.ID = ID;
+                                                tmpEffects.Add(material);
+                                            }
+                                        }
+                                        else if (teq.Item is effectFx_profile_abstractProfile_COMMONTechniqueLambert shader)
+                                        {
+                                            if (shader.diffuse != null)
+                                            {
+                                                var material = ExtractMaterial(shader.diffuse.Item);
+                                                material.ID = ID;
+                                                tmpEffects.Add(material);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            foreach (var effect in tmpEffects)
+            {
+                if (matEffect.TryGetValue(effect.ID, out var effectId))
+                {
+                    effect.ID = effectId;
+                    if (!string.IsNullOrEmpty(effect.Texture))
+                    {
+                        if (imgMap.TryGetValue(effect.Texture, out var effectTexture))
+                        {
+                            effect.Texture = effectTexture;
+                        }
+                    }
+                    Materials.Add(effect);
+                }
+            }
+        }
+
+        private void ProcessNode(node node)
+        {
+            Node n = new Node {Name = node.name, ID = node.id};
+
+            if (node.Items != null)
+            {
+                // Try finding matrix
+                foreach (var i in node.Items)
+                {
+                    if (i is matrix mtx)
+                    {
+                        n.Transform = new Matrix4(
+                            (float)mtx.Values[0],  (float)mtx.Values[4],  (float)mtx.Values[8],  (float)mtx.Values[12],
+                            (float)mtx.Values[1],  (float)mtx.Values[5],  (float)mtx.Values[9],  (float)mtx.Values[13],
+                            (float)mtx.Values[2],  (float)mtx.Values[6],  (float)mtx.Values[10], (float)mtx.Values[14],
+                            (float)mtx.Values[3],  (float)mtx.Values[7],  (float)mtx.Values[11], (float)mtx.Values[15]);
+                    }
+                }
+            }
+
+            // Find geometry and material
+            if (node.instance_geometry != null && node.instance_geometry.Length > 0)
+            {
+                var instGeom = node.instance_geometry[0];
+                if (!string.IsNullOrEmpty(instGeom.url))
+                {
+                    n.MeshID = instGeom.url.Substring(1);
+                }
+                if (instGeom.bind_material?.technique_common != null)
+                {
+                    foreach (var teq in instGeom.bind_material.technique_common)
+                    {
+                        var target = teq.target;
+                        if (string.IsNullOrEmpty(target)) continue;
+
+                        target = target.Substring(1);
+                        MatSymTarget[teq.symbol] = target;
+                    }
+                }
+            }
+
+            if (node.Items != null && node.instance_geometry != null && node.instance_geometry.Length > 0)
+                Nodes.Add(n);
+
+            // Recurse if the scene is hierarchical
+            if (node.node1 != null)
+            {
+                foreach (node nd in node.node1)
+                    ProcessNode(nd);
+            }
+        }
+
+        private void ParseVisualScene()
+        {
+            Nodes = new List<Node>();
+            if (Model == null) return;
+
+            MatSymTarget = new Dictionary<string, string>();
+
+            foreach (var item in Model.Items)
+            {
+                if (item is library_visual_scenes scenes)
+                {
+                    var scene = scenes.visual_scene[0];
+                    foreach (var node in scene.node)
+                    {
+                        ProcessNode(node);
+                    }
+                }
+            }
+        }
+
+        private List<ModelPrim> Parse()
+        {
+            var Prims = new List<ModelPrim>();
+
+            float DEG_TO_RAD = 0.017453292519943295769236907684886f;
+
+            if (Model == null) return Prims;
+
+            Matrix4 transform = Matrix4.Identity;
+
+            UpAxisType upAxis = UpAxisType.Y_UP;
+
+            var asset = Model.asset;
+            if (asset != null)
+            {
+                upAxis = asset.up_axis;
+                if (asset.unit != null)
+                {
+                    float meter = (float)asset.unit.meter;
+                    transform = new Matrix4(
+                        meter, transform.M12, transform.M13, transform.M14,
+                        transform.M21, meter, transform.M23, transform.M24,
+                        transform.M31, transform.M32, meter, transform.M34,
+                        transform.M41, transform.M42, transform.M43, transform.M44);
+                }
+            }
+
+            Matrix4 rotation = Matrix4.Identity;
+
+            if (upAxis == UpAxisType.X_UP)
+            {
+                rotation = Matrix4.CreateFromEulers(0.0f, 90.0f * DEG_TO_RAD, 0.0f);
+            }
+            else if (upAxis == UpAxisType.Y_UP)
+            {
+                rotation = Matrix4.CreateFromEulers(90.0f * DEG_TO_RAD, 0.0f, 0.0f);
+            }
+
+            rotation *= transform;
+            transform = rotation;
+
+            ParseVisualScene();
+            ParseMaterials();
+
+            foreach (var item in Model.Items) {
+                if (item is library_geometries geometries) {
+                    foreach (var geo in geometries.geometry) {
+                        var mesh = geo.Item as mesh;
+                        if (mesh == null) 
+                            continue;
+
+                        var nodes = Nodes.FindAll(n => n.MeshID == geo.id);     // Find all instances of this geometry
+                        ModelPrim? firstPrim = null;         // The first prim is actually calculated, the others are just copied from it.
+
+                        Vector3 asset_scale = new Vector3(1,1,1);
+                        Vector3 asset_offset = new Vector3(0, 0, 0);            // Scale and offset between Collada and OS asset (Which is always in a unit cube)
+
+                        foreach (var node in nodes) {
+                            var prim = new ModelPrim
+                            {
+                                ID = node.ID
+                            };
+                            Prims.Add(prim);
+
+                            // First node is used to create the asset. This is as the code to crate the byte array is somewhat
+                            // erroneously placed in the ModelPrim class.
+                            if (firstPrim == null) {
+                                firstPrim = prim;
+                                AddPositions(out asset_scale, out asset_offset, mesh, prim, transform);     // transform is used only for inch -> meter and up axis transform. 
+
+                                foreach (var mitem in mesh.Items) {
+                                    if (mitem is triangles triangles)
+                                        AddFacesFromPolyList(Triangles2Polylist(triangles), mesh, prim, transform);  // Transform is used to turn normals according to up axis
+                                    if (mitem is polylist polylist)
+                                        AddFacesFromPolyList(polylist, mesh, prim, transform);
+                                }
+
+                                prim.CreateAsset(UUID.Zero);
+                            }
+                            else {
+                                // Copy the values set by Addpositions and AddFacesFromPolyList as these are the same as long as the mesh is the same
+                                prim.Asset = firstPrim!.Asset;
+                                prim.BoundMin = firstPrim!.BoundMin;
+                                prim.BoundMax = firstPrim!.BoundMax;
+                                prim.Positions = firstPrim!.Positions;
+                                prim.Faces = firstPrim!.Faces;
+                            }
+
+                            // Note: This ignores any shear or similar non-linear effects. This can cause some problems but it
+                            // is unlikely that authoring software can generate such matrices.
+                            node.Transform.Decompose(out prim.Scale, out prim.Rotation, out prim.Position);
+                            float roll, pitch, yaw;
+                            node.Transform.GetEulerAngles(out roll, out pitch, out yaw);
+
+                            // The offset created when normalizing the mesh vertices into the OS unit cube must be rotated
+                            // before being added to the position part of the Collada transform. 
+                            Matrix4 rot = Matrix4.CreateFromQuaternion(prim.Rotation);              // Convert rotation to matrix for for Transform
+                            Vector3 offset = Vector3.Transform(asset_offset * prim.Scale, rot);     // The offset must be rotated and mutiplied by the Collada file's scale as the offset is added during rendering with the unit cube mesh already multiplied by the compound scale.
+                            prim.Position += offset;
+                            prim.Scale *= asset_scale;                                              // Modify scale from Collada instance by the rescaling done in AddPositions()
+                        }
+                    }
+                }
+            }
+
+            return Prims;
+        }
+
+        private source? FindSource(IEnumerable<source> sources, string id)
+        {
+            id = id.Substring(1);
+
+            return sources.FirstOrDefault(src => src.id == id);
+        }
+
+        private void AddPositions(out Vector3 scale, out Vector3 offset, mesh mesh, ModelPrim prim, Matrix4 transform)
+        {
+            prim.Positions = new List<Vector3>();
+            source? posSrc = FindSource(mesh.source, mesh.vertices.input[0].source);
+            if (posSrc == null) throw new InvalidDataException("Missing position source in Collada mesh");
+            double[] posVals = ((float_array)posSrc.Item).Values;
+
+            for (int i = 0; i < posVals.Length / 3; i++)
+            {
+                Vector3 pos = new Vector3((float)posVals[i * 3], (float)posVals[i * 3 + 1], (float)posVals[i * 3 + 2]);
+                pos = Vector3.Transform(pos, transform);
+                prim.Positions.Add(pos);
+            }
+
+            prim.BoundMin = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+            prim.BoundMax = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+
+            foreach (var pos in prim.Positions)
+            {
+                prim.BoundMax = new Vector3(
+                    Math.Max(prim.BoundMax.X, pos.X),
+                    Math.Max(prim.BoundMax.Y, pos.Y),
+                    Math.Max(prim.BoundMax.Z, pos.Z));
+                prim.BoundMin = new Vector3(
+                    Math.Min(prim.BoundMin.X, pos.X),
+                    Math.Min(prim.BoundMin.Y, pos.Y),
+                    Math.Min(prim.BoundMin.Z, pos.Z));
+            }
+
+            scale = prim.BoundMax - prim.BoundMin;
+            offset = prim.BoundMin + (scale / 2);
+
+            // Fit vertex positions into identity cube -0.5 .. 0.5
+            for (int i = 0; i < prim.Positions.Count; i++)
+            {
+                Vector3 pos = prim.Positions[i];
+                pos = new Vector3(
+                    scale.X == 0 ? 0 : ((pos.X - prim.BoundMin.X) / scale.X) - 0.5f,
+                    scale.Y == 0 ? 0 : ((pos.Y - prim.BoundMin.Y) / scale.Y) - 0.5f,
+                    scale.Z == 0 ? 0 : ((pos.Z - prim.BoundMin.Z) / scale.Z) - 0.5f
+                    );
+                prim.Positions[i] = pos;
+            }
+        }
+
+        private int[] StrToArray(string s)
+        {
+            string[] vals = Regex.Split(s.Trim(), @"\s+");
+            int[] ret = new int[vals.Length];
+
+            for (int i = 0; i < ret.Length; i++)
+            {
+                int.TryParse(vals[i], out ret[i]);
+            }
+
+            return ret;
+        }
+
+        private void AddFacesFromPolyList(polylist list, mesh mesh, ModelPrim prim, Matrix4 transform)
+        {
+            source? posSrc = null;
+            source? normalSrc = null;
+            source? uvSrc = null;
+
+            ulong stride = 0;
+            int posOffset = -1;
+            int norOffset = -1;
+            int uvOffset = -1;
+
+            foreach (var inp in list.input)
+            {
+                stride = Math.Max(stride, inp.offset);
+
+                switch (inp.semantic)
+                {
+                    case "VERTEX":
+                        posSrc = FindSource(mesh.source, mesh.vertices.input[0].source);
+                        posOffset = (int)inp.offset;
+                        break;
+                    case "NORMAL":
+                        normalSrc = FindSource(mesh.source, inp.source);
+                        norOffset = (int)inp.offset;
+                        break;
+                    case "TEXCOORD":
+                        uvSrc = FindSource(mesh.source, inp.source);
+                        uvOffset = (int)inp.offset;
+                        break;
+                }
+            }
+
+            stride += 1;
+
+            if (posSrc == null) return;
+
+            var vcount = StrToArray(list.vcount);
+            var idx = StrToArray(list.p);
+
+            Vector3[]? normals = null;
+            if (normalSrc != null)
+            {
+                var norVal = ((float_array)normalSrc.Item).Values;
+                normals = new Vector3[norVal.Length / 3];
+
+                for (int i = 0; i < normals.Length; i++)
+                {
+                    normals[i] = new Vector3((float)norVal[i * 3 + 0], (float)norVal[i * 3 + 1], (float)norVal[i * 3 + 2]);
+                    normals[i] = Vector3.Normalize(Vector3.TransformNormal(normals[i], transform));
+                }
+            }
+
+            Vector2[]? uvs = null;
+            if (uvSrc != null)
+            {
+                var uvVal = ((float_array)uvSrc.Item).Values;
+                uvs = new Vector2[uvVal.Length / 2];
+
+                for (int i = 0; i < uvs.Length; i++)
+                {
+                    uvs[i] = new Vector2((float)uvVal[i * 2 + 0], (float)uvVal[i * 2 + 1]);
+                }
+
+            }
+
+            ModelFace face = new ModelFace {MaterialID = list.material};
+            if (face.MaterialID != null)
+            {
+                if (MatSymTarget.TryGetValue(list.material, out var value))
+                {
+                    ModelMaterial? mat = Materials.Find(m => m.ID == value);
+                    if (mat != null)
+                    {
+                        face.Material = mat;
+                    }
+                }
+            }
+
+            int curIdx = 0;
+
+            foreach (var nvert in vcount)
+            {
+                if (nvert < 3 || nvert > 4)
+                {
+                    throw new InvalidDataException("Only triangles and quads supported");
+                }
+
+                Vertex[] verts = new Vertex[nvert];
+                for (int j = 0; j < nvert; j++)
+                {
+                    verts[j].Position = prim.Positions[idx[curIdx + posOffset + (int)stride * j]];
+
+                    if (normals != null)
+                    {
+                        verts[j].Normal = normals[idx[curIdx + norOffset + (int)stride * j]];
+                    }
+
+                    if (uvs != null)
+                    {
+                        verts[j].TexCoord = uvs[idx[curIdx + uvOffset + (int)stride * j]];
+                    }
+                }
+
+
+                switch (nvert)
+                {
+                    case 3:
+                        face.AddVertex(verts[0]);
+                        face.AddVertex(verts[1]);
+                        face.AddVertex(verts[2]);
+                        break;
+                    case 4:
+                        face.AddVertex(verts[0]);
+                        face.AddVertex(verts[1]);
+                        face.AddVertex(verts[2]);
+
+                        face.AddVertex(verts[0]);
+                        face.AddVertex(verts[2]);
+                        face.AddVertex(verts[3]);
+                        break;
+                }
+
+                curIdx += (int)stride * nvert;
+            }
+
+            prim.Faces.Add(face);
+
+
+        }
+
+        private polylist Triangles2Polylist(triangles triangles)
+        {
+            polylist poly = new polylist
+            {
+                count = triangles.count,
+                input = triangles.input,
+                material = triangles.material,
+                name = triangles.name,
+                p = triangles.p
+            };
+
+            const string str = "3 ";
+            System.Text.StringBuilder builder = new System.Text.StringBuilder(str.Length * (int)poly.count);
+            for (int i = 0; i < (int)poly.count; i++) builder.Append(str);
+            poly.vcount = builder.ToString();
+
+            return poly;
+        }
+
+    }
+}
+

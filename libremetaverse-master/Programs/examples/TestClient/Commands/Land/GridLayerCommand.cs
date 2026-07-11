@@ -1,0 +1,36 @@
+using System;
+using System.Threading.Tasks;
+using LibreMetaverse;
+
+namespace TestClient.Commands.Land
+{
+    public class GridLayerCommand : Command
+    {
+        public GridLayerCommand(TestClient testClient)
+        {
+            Name = "gridlayer";
+            Description = "Downloads all of the layer chunks for the grid object map";
+            Category = CommandCategory.Simulator;
+
+            testClient.Grid.GridLayer += Grid_GridLayer;
+        }
+
+        void Grid_GridLayer(object sender, GridLayerEventArgs e)
+        {
+            Console.WriteLine("Layer({0}) Bottom: {1} Left: {2} Top: {3} Right: {4}",
+                e.Layer.ImageID.ToString(), e.Layer.Bottom, e.Layer.Left, e.Layer.Top, e.Layer.Right);
+        }
+
+        public override string Execute(string[] args, UUID fromAgentID)
+        {
+            return ExecuteAsync(args, fromAgentID).GetAwaiter().GetResult();
+        }
+
+        public override Task<string> ExecuteAsync(string[] args, UUID fromAgentID)
+        {
+            _ = Client.Grid.RequestMapLayerAsync(GridLayerType.Objects);
+
+            return Task.FromResult("Sent.");
+        }
+    }
+}

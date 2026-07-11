@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>TammyAgent</AssemblyName>
+    <RootNamespace>TammyAgent</RootNamespace>
+    <!-- TammyAgent lives outside the LibreMetaverse folder, so it does NOT inherit that
+         subtree's central package management; versions are specified inline here. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Use LibreMetaverse as a library without modifying its core. -->
+    <ProjectReference Include="..\libremetaverse-master\LibreMetaverse\LibreMetaverse.csproj" />
+  </ItemGroup>
+
+</Project>
