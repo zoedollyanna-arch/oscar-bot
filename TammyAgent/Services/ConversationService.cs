@@ -37,6 +37,14 @@ namespace TammyAgent.Services
                 if (mode != TammyModes.Automated)
                     return;
 
+                // If a staff member has taken over this conversation (via #tammy-live), stay quiet —
+                // the human is handling it and will reply through /tammy im.
+                if (await _db.IsConversationAssignedAsync(convId))
+                {
+                    Console.WriteLine($"[conv {convId}] taken over by staff — AI silent.");
+                    return;
+                }
+
                 // Automated: let the brain answer (falls back to a holding line if the brain is off).
                 if (!_brain.Configured)
                 {

@@ -28,6 +28,7 @@ namespace TammyAgent
         private static async Task<int> Main(string[] args)
         {
             Console.WriteLine("🌺 Tammy Brightwood agent starting...");
+            DotEnv.Load(); // local dev convenience; Render uses real env vars
 
             string firstName, lastName, password, databaseUrl;
             try
@@ -84,6 +85,11 @@ namespace TammyAgent
             using var shutdown = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; shutdown.Cancel(); };
             AppDomain.CurrentDomain.ProcessExit += (_, _) => shutdown.Cancel();
+
+            // In a combined deployment the Discord process owns $PORT. Standalone TammyAgent
+            // deployments can leave this enabled (the default).
+            if (!string.Equals(OptionalEnv("TAMMY_HEALTH_SERVER"), "false", StringComparison.OrdinalIgnoreCase))
+                HealthServer.Start(() => sl.Connected);
 
             var slTask = sl.RunAsync(shutdown.Token);
             var queueTask = queue.RunAsync(shutdown.Token);

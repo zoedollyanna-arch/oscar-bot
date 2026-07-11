@@ -154,6 +154,18 @@ namespace TammyAgent.Services
             return (long)(await ins.ExecuteScalarAsync());
         }
 
+        // True if a staff member has taken over this conversation (assigned_staff_id set) — the AI
+        // must not auto-reply while a human is handling it.
+        public async Task<bool> IsConversationAssignedAsync(long conversationId)
+        {
+            await using var conn = await _dataSource.OpenConnectionAsync();
+            await using var cmd = new NpgsqlCommand(
+                "SELECT assigned_staff_id FROM tammy_conversations WHERE id=@id", conn);
+            cmd.Parameters.AddWithValue("id", conversationId);
+            var r = await cmd.ExecuteScalarAsync();
+            return r is string s && !string.IsNullOrWhiteSpace(s);
+        }
+
         public async Task LogMessageAsync(long conversationId, string direction, string messageType,
             string text, string region, string position)
         {
@@ -271,9 +283,12 @@ CREATE TABLE IF NOT EXISTS tammy_messages (
   message_text TEXT,
   region TEXT,
   position TEXT,
+  notified BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE tammy_messages ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_tammy_msg_conv ON tammy_messages (conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_tammy_msg_notify ON tammy_messages (notified) WHERE notified = false;
 CREATE TABLE IF NOT EXISTS tammy_action_requests (
   id BIGSERIAL PRIMARY KEY,
   conversation_id BIGINT,

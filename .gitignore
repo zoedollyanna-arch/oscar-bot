@@ -11,6 +11,7 @@ obj/
 # Legacy Node artifacts (Tammy is now a C# agent)
 node_modules
 *.csv
+linden/
 
 # IDE
 .vs/

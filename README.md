@@ -40,10 +40,15 @@ DATABASE_URL=postgres://...neon.tech/... \
 dotnet run --project TammyAgent/TammyAgent.csproj -c Release -f net8.0
 ```
 
-## Deploy (Render Background Worker, Docker)
-Use the root `Dockerfile`. Create a **Background Worker** (not a web service), runtime **Docker**,
-and set the environment variables listed in the Dockerfile. Tammy's SL password becomes a protected
-Render env var — never put it in source, screenshots, or the database.
+## Deploy (one Render Web Service, Docker)
+Use the root `Dockerfile` for the existing **Discord bot Web Service**. The container starts both the
+Node Discord bot and the C# Second Life agent. Node owns Render's `PORT` and `/health`; both processes
+share `DATABASE_URL`, and the container is restarted if either process exits. Leave the Render root
+directory at the repository root, choose the **Docker** runtime, and do not set an `npm install` build
+command because the Dockerfile builds both applications.
+
+Set both the Discord variables from `.env.example` and the TammyAgent variables below in the same
+service. Keep all tokens and passwords in protected Render environment variables.
 
 ## Environment variables
 | Var | Required | Purpose |
@@ -54,3 +59,5 @@ Render env var — never put it in source, screenshots, or the database.
 | `LIFELINE_API_URL` / `LIFELINE_API_SECRET` | no | Lifeline backend for guest context |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | no | Enables the AI brain (default model `gpt-4o-mini`) |
 | `TAMMY_MODE` | no | Initial mode (e.g. `assisted`) |
+| `PORT` | Render sets it | HTTP health-listener port (defaults to `3000` locally) |
+| `TAMMY_HEALTH_SERVER` | no | Set internally to `false` in the combined container; Node owns the port |

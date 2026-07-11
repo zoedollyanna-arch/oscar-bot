@@ -1,28 +1,24 @@
-# Tammy Brightwood — Second Life agent (Render Background Worker)
-# Multi-stage: build the .NET 8 worker (which also builds the LibreMetaverse library), then run it
-# on the lightweight runtime image. Deploy on Render as a Background Worker (no public HTTP).
-
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+# One Render Web Service: Discord bot + Tammy Second Life agent.
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS dotnet-build
 WORKDIR /src
-
-# Copy everything needed to build (TammyAgent references the LibreMetaverse project directly).
 COPY . .
-
 RUN dotnet restore TammyAgent/TammyAgent.csproj
-RUN dotnet publish TammyAgent/TammyAgent.csproj \
-    -c Release \
-    -f net8.0 \
-    -o /app/publish \
-    --no-restore
+RUN dotnet publish TammyAgent/TammyAgent.csproj -c Release -f net8.0 -o /app/tammy --no-restore
+
+FROM node:20-bookworm-slim AS node-deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 FROM mcr.microsoft.com/dotnet/runtime:8.0 AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=build /app/publish .
-
-# All configuration is via environment variables (set them in the Render dashboard):
-#   SL_FIRST_NAME  SL_LAST_NAME  SL_PASSWORD  SL_START_LOCATION
-#   DATABASE_URL           (the SAME Neon URL the main Discord bot uses)
-#   LIFELINE_API_URL  LIFELINE_API_SECRET   (Lifeline backend for guest context)
-#   OPENAI_API_KEY  OPENAI_MODEL           (optional — enables the AI brain)
-#   TAMMY_MODE                              (optional initial mode, e.g. assisted)
-ENTRYPOINT ["dotnet", "TammyAgent.dll"]
+COPY --from=dotnet-build /app/tammy ./TammyAgent
+COPY --from=node-deps /app/node_modules ./node_modules
+COPY package.json index.js announcements.js applications.js backendClient.js config.js db.js faq.js faqData.js redelivery.js store.js support.js ui.js ./
+COPY start-services.sh ./
+RUN chmod +x ./start-services.sh
+EXPOSE 3000
+ENTRYPOINT ["./start-services.sh"]
