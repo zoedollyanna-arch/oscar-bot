@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: oscar-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeployTrigger: commit

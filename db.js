@@ -166,6 +166,39 @@ async function init() {
       `);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_staffnotif_staff ON staff_notifications (staff_discord_id);`);
 
+      // Shared TammyAgent transport. These tables intentionally contain only in-world
+      // conversations and commands; Lifeline Assistant owns tickets/applications/redelivery.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS tammy_settings (
+          id TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'assisted',
+          desired_status TEXT NOT NULL DEFAULT 'online', actual_status TEXT NOT NULL DEFAULT 'offline',
+          current_region TEXT, current_position TEXT, last_connected_at TIMESTAMPTZ,
+          last_disconnected_at TIMESTAMPTZ, manual_controller_discord_id TEXT,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        INSERT INTO tammy_settings (id) VALUES ('default') ON CONFLICT (id) DO NOTHING;
+        CREATE TABLE IF NOT EXISTS tammy_commands (
+          id BIGSERIAL PRIMARY KEY, command_type TEXT NOT NULL, payload JSONB,
+          requested_by TEXT, status TEXT NOT NULL DEFAULT 'pending', result JSONB,
+          error_message TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), processed_at TIMESTAMPTZ
+        );
+        CREATE INDEX IF NOT EXISTS idx_tammy_commands_status ON tammy_commands(status, created_at);
+        CREATE TABLE IF NOT EXISTS tammy_conversations (
+          id BIGSERIAL PRIMARY KEY, avatar_uuid TEXT NOT NULL, avatar_name TEXT,
+          channel_type TEXT, status TEXT NOT NULL DEFAULT 'open', conversation_summary TEXT,
+          assigned_staff_id TEXT, started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          last_message_at TIMESTAMPTZ, closed_at TIMESTAMPTZ
+        );
+        CREATE INDEX IF NOT EXISTS idx_tammy_conv_avatar ON tammy_conversations(avatar_uuid, status);
+        CREATE TABLE IF NOT EXISTS tammy_messages (
+          id BIGSERIAL PRIMARY KEY, conversation_id BIGINT, direction TEXT NOT NULL,
+          message_type TEXT, message_text TEXT, region TEXT, position TEXT,
+          notified BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        ALTER TABLE tammy_messages ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT false;
+        CREATE INDEX IF NOT EXISTS idx_tammy_msg_notify ON tammy_messages(notified) WHERE notified=false;
+      `);
+
       ready = true;
       console.log("✅ Neon Postgres ready (data + settings + notifications).");
       return true;

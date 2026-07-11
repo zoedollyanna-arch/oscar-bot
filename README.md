@@ -1,6 +1,6 @@
 # Tammy Brightwood — Second Life Agent
 
-Tammy is Lifeline's **in-world Second Life staff avatar**, run as a C# [LibreMetaverse](https://github.com/cinderblocks/libremetaverse) worker. She logs into Second Life, greets residents, answers questions, and handles IMs/local chat — and she is driven from Discord by the **main Lifeline Assistant bot**, not by her own Discord app.
+Tammy is Lifeline's **in-world Second Life staff avatar**, run as a C# [LibreMetaverse](https://github.com/cinderblocks/libremetaverse) worker. She logs into Second Life, greets residents, answers questions, and handles IMs/local chat. The small Node process in this repository only posts the `#tammy-live` feed and handles its buttons; the **main Lifeline Assistant bot** owns slash commands and business workflows.
 
 > Discord-side staff features (tickets, FAQ, redelivery, announcements, applications) live in the **main bot** (`lifeline-discord-bot`). Tammy must **not** duplicate them. She shares the main bot's **Neon** database and reads the **Lifeline backend** for guest context.
 
@@ -50,6 +50,10 @@ command because the Dockerfile builds both applications.
 Set both the Discord variables from `.env.example` and the TammyAgent variables below in the same
 service. Keep all tokens and passwords in protected Render environment variables.
 
+The service must show **Runtime: Docker** in Render. If its logs say `Running 'npm start'`, Render is
+still using the old Node runtime and the C# Second Life agent is not running. Apply `render.yaml` as a
+Blueprint or change/recreate the existing service as Docker; keep it as one web service, not two.
+
 ## Environment variables
 | Var | Required | Purpose |
 |-----|----------|---------|
@@ -58,6 +62,8 @@ service. Keep all tokens and passwords in protected Render environment variables
 | `DATABASE_URL` | yes | **Same Neon URL as the main Discord bot** — this is what shares the data |
 | `LIFELINE_API_URL` / `LIFELINE_API_SECRET` | no | Lifeline backend for guest context |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | no | Enables the AI brain (default model `gpt-4o-mini`) |
-| `TAMMY_MODE` | no | Initial mode (e.g. `assisted`) |
+| `TAMMY_MODE` | no | `automated` replies to IMs; `assisted` only logs them for staff |
+| `TAMMY_LIVE_CHANNEL_ID` | yes for feed | Discord channel receiving in-world messages and controls |
+| `TAMMY_LIVE_POLL_MS` | no | Feed polling interval; default `5000` ms |
 | `PORT` | Render sets it | HTTP health-listener port (defaults to `3000` locally) |
 | `TAMMY_HEALTH_SERVER` | no | Set internally to `false` in the combined container; Node owns the port |
