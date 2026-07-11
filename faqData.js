@@ -17,7 +17,7 @@ const DEFAULT_FAQS = [
     topic: "Redelivery",
     keywords: ["redeliver", "redelivery", "lost my item", "missing item", "didn't receive", "resend", "lost product"],
     answer:
-      "Need an item resent? Use `/redelivery` — tell me your Second Life username and the product, and I'll log it for staff to send from the in-world redelivery system. You'll get a confirmation once it's queued.",
+      "Need an item resent? Use `/redelivery` — just tell me your Second Life username and the product, and I'll make sure it gets sent back out to you. You'll get a confirmation once it's on the way.",
   },
   {
     topic: "Cruise stays",

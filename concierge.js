@@ -56,7 +56,8 @@ const intents = [
     id: "faq",
     words: [
       "faq", "how does lifeline work", "what is lifeline", "how do i start", "getting started",
-      "new player", "new here", "im new", "i'm new", "just joined", "how do i play", "where do i begin",
+      "new player", "new here", "im new", "i'm new", "just joined", "how do i play lifeline", "how do i get started",
+      "where do i begin", "how do i play the game",
     ],
     reply: "Happy to help you find your feet! Try **`/faq search`** with what you're wondering about, or **`/faq list`** to browse the topics I keep on hand.",
   },
@@ -167,6 +168,77 @@ const intents = [
       "pharmacy",
     ],
     reply: "Open **Insurance** on your ZPhone to view or buy a plan, then use the **Pharmacy** app for covered medication. Easy to manage from your phone.",
+  },
+  {
+    id: "partners",
+    words: [
+      "partner up", "how do i partner", "become partners", "partnership", "partner hud", "bonding",
+      "bond meter", "propose to", "how do i propose", "how do i get married", "polycule", "relationship system",
+    ],
+    reply: "Ready to make it official? 💕 Use your **Partner HUD** to send a partnership request, then grow your bond with actions like hugs, cuddles, dates, and a proposal. It supports polycules, shared groups, and children too. If your Partner HUD acts up, run **`/support`**.",
+  },
+  {
+    id: "pets",
+    words: [
+      "adopt a pet", "get a pet", "pet companion", "feed my pet", "wash my pet", "pet hud", "pet won't",
+      "pet wont", "pet not working", "my pet won't",
+    ],
+    reply: "Aww, pets! 🐾 You can adopt and care for a pet companion — feed it, wash it, and play with it to keep it happy, and its progress saves to the cloud. Having trouble with your pet? Open **`/support`** and we'll help.",
+  },
+  {
+    id: "babysitter",
+    words: [
+      "babysitter", "babysitting", "book a babysitter", "become a babysitter", "watch my kid", "watch my child",
+      "childcare", "hire a sitter",
+    ],
+    reply: "Need a sitter — or want to earn as one? 👶 Use the **Babysitter** system in-world to register as a babysitter or book one for your little one. Shifts are tracked and paid safely, with reviews after. Questions? **`/support`** has you covered.",
+  },
+  {
+    id: "households",
+    words: [
+      "household", "create a household", "start a household", "family home", "add a room", "household needs",
+      "house system", "make a home",
+    ],
+    reply: "Building a home together? 🏡 Use the **Household** system to create your household, add rooms (kitchen, bedroom, nursery and more), assign roles, and keep up with household needs. Need a hand setting it up? Run **`/support`**.",
+  },
+  {
+    id: "music",
+    words: [
+      "zpods", "z-pods", "play music", "music widget", "listen to music", "song list", "music radio",
+      "music won't play", "music wont play", "music not playing",
+    ],
+    reply: "Time for some tunes! 🎶 Use **ZPods** or the music widget on your ZPhone to search songs, play a track, shuffle the radio, or browse by artist. If music won't load, detach and re-attach your HUD, then try **`/support`**.",
+  },
+  {
+    id: "messaging",
+    words: [
+      "zmessage", "z-message", "grid message", "message someone in world", "in world message", "in-world message",
+      "group message", "send an im across",
+    ],
+    reply: "Want to reach someone across the grid? ✉️ **ZMessage** sends direct and group messages that stick even through teleports and relogs. If a message won't go through, open **`/support`**.",
+  },
+  {
+    id: "mobile_app",
+    words: [
+      "soul link", "soullink", "link my app", "link the app", "mobile app", "lifeline app", "connect my app",
+      "connect the app", "/link", "phone app", "link code",
+    ],
+    reply: "You can link the Lifeline mobile app to your avatar! 📱 Grab the code in the app, then type **`/link <code>`** in local chat to connect. Once linked, the app shows your profile and stats. Trouble linking? Run **`/support`**.",
+  },
+  {
+    id: "progression",
+    words: [
+      "earn xp", "how do i get xp", "how do i earn xp", "level up", "leveling up", "milestones", "progression",
+      "xp system", "rank up", "gain xp",
+    ],
+    reply: "Want to level up? ⭐ You earn XP from **jobs** and **roleplay actions**, and milestones unlock automatically as you go. You can redeem XP over in **ZFunds** (there's a short cooldown between redemptions). Curious where you're at? Check your HUD.",
+  },
+  {
+    id: "parks",
+    words: [
+      "dinoworld", "dino world", "fossil dig", "fossil find", "hit dino", "cabana", "park admission", "theme park",
+    ],
+    reply: "Adventure time! 🦕 Lifeline's destinations include parks like **DinoWorld**, with activities such as fossil digs and dino games, plus admissions and cabanas. Ask me for directions anytime, or run **`/support`** if something isn't working.",
   },
   {
     id: "reset",

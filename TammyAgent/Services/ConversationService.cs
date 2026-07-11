@@ -45,6 +45,15 @@ namespace TammyAgent.Services
                     return;
                 }
 
+                // Friendly greeter: a plain "hi"/"hello" gets a warm, consistent welcome that invites the
+                // resident to reach out. Deterministic (works with or without the brain) and rate-limited
+                // per resident so she never spams the same person.
+                if (TammyGreeter.IsGreeting(msg.Text) && TammyGreeter.ShouldGreet(msg.AvatarUuid))
+                {
+                    await ReplyAsync(convId, msg, TammyGreeter.Message(msg.AvatarName, msg.ChannelType == "local"));
+                    return;
+                }
+
                 // Automated: let the brain answer (falls back to a holding line if the brain is off).
                 if (!_brain.Configured)
                 {
