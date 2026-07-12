@@ -275,6 +275,99 @@ async function handleAssignComponent(interaction) {
   return true;
 }
 
+/* ── Scheduled jobs: report-card DMs + weekly honor roll ────────────────────
+   The backend generates + stores the data (monthly cron). Tammy delivers it to
+   Discord because only she can resolve guild members and DM. Draining the
+   pending queue is idempotent (backend marks delivered). */
+const HONOR_ROLL_CHANNEL_ID = process.env.ACADEMY_HONOR_ROLL_CHANNEL_ID || process.env.ACADEMY_APPLICATIONS_CHANNEL_ID || "1457443991770366137";
+let lastHonorRollWeek = "";
+
+async function resolveGuildUser(client, username) {
+  const uname = String(username || "").replace(/^@/, "").toLowerCase();
+  if (!uname || !client.guilds?.cache?.size) return null;
+  for (const guild of client.guilds.cache.values()) {
+    const members = await guild.members.fetch({ query: uname, limit: 5 }).catch(() => null);
+    const hit = members?.find((m) => m.user.username.toLowerCase() === uname || (m.user.tag || "").toLowerCase() === uname);
+    if (hit) return hit.user;
+  }
+  return null;
+}
+
+function reportCardEmbed(name, data) {
+  const subjects = (data.subjects || []).map((s) => `${s.subject}: **${s.letter}**${s.avgPct != null ? ` (${s.avgPct}%)` : ""}`).join("\n") || "No graded work yet.";
+  return new EmbedBuilder().setColor(BRAND)
+    .setTitle("🎓 Your Lifeline Academy Report Card")
+    .setDescription(`Hi **${name}**! Here's how you're doing:`)
+    .addFields(
+      { name: "Overall", value: `${data.letter}${data.gpa != null ? ` • ${data.gpa}%` : ""}`, inline: true },
+      { name: "Attendance streak", value: `${data.attendanceStreak || 0} day(s)`, inline: true },
+      { name: "By subject", value: subjects.slice(0, 1000) },
+      { name: `A note from ${data.teacher || "Tammy"}`, value: data.comment || "Keep up the great work!" },
+    )
+    .setFooter({ text: "Lifeline Academy Digital • Tammy Brightwood" }).setTimestamp();
+}
+
+async function runReportCardDMs(client) {
+  let cards;
+  try { cards = (await backendGet("/academy/admin/report-cards/pending")).cards; }
+  catch (e) { console.error("[academy] report-card pending fetch failed:", e.message); return; }
+  if (!cards?.length) return;
+  const delivered = [];
+  for (const c of cards) {
+    const user = await resolveGuildUser(client, c.discord_username);
+    if (!user) continue;
+    const ok = await user.send({ embeds: [reportCardEmbed(c.display_name || "Scholar", c.data || {})] }).then(() => true).catch(() => false);
+    if (ok) delivered.push(c.id);
+  }
+  if (delivered.length) {
+    await backendPost("/academy/admin/report-cards/mark-delivered", { ids: delivered }).catch(() => {});
+    console.log(`[academy] DM'd ${delivered.length} report card(s).`);
+  }
+}
+
+async function runHonorRoll(client) {
+  let hr;
+  try { hr = await backendGet("/academy/admin/honor-roll"); }
+  catch (e) { console.error("[academy] honor-roll fetch failed:", e.message); return; }
+  const grades = (hr.topGrades || []).filter((g) => g.gpa != null);
+  const streaks = hr.topStreaks || [];
+  if (!grades.length && !streaks.length) return; // nothing to celebrate yet
+  const medal = (i) => ["🥇", "🥈", "🥉"][i] || "🎖️";
+  const embed = new EmbedBuilder().setColor(0xf2b84b)
+    .setTitle("🌟 Lifeline Academy — Honor Roll")
+    .setDescription("Celebrating our hardest-working scholars this week! 🍎")
+    .addFields(
+      { name: "🏆 Top grades", value: grades.slice(0, 10).map((g, i) => `${medal(i)} **${g.display_name}** — ${g.gpa}% (${g.grade_band || "?"})`).join("\n") || "—" },
+      { name: "🔥 Longest streaks", value: streaks.slice(0, 10).map((s, i) => `${medal(i)} **${s.name}** — ${s.streak}-day streak`).join("\n") || "—" },
+    )
+    .setFooter({ text: "Lifeline Academy Digital • keep it up!" }).setTimestamp();
+  const ch = await client.channels.fetch(HONOR_ROLL_CHANNEL_ID).catch(() => null);
+  if (ch?.send) { await ch.send({ embeds: [embed] }).catch((e) => console.error("[academy] honor-roll post failed:", e.message)); console.log("[academy] honor roll posted."); }
+}
+
+function isoWeek(d = new Date()) {
+  const onejan = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return `${d.getUTCFullYear()}-W${Math.ceil((((d - onejan) / 86400000) + onejan.getUTCDay() + 1) / 7)}`;
+}
+
+function scheduleAcademyJobs(client) {
+  if (!ADMIN_SECRET) { console.warn("[academy] scheduler idle: ACADEMY_SHARED_SECRET not set."); return; }
+  const tick = async () => {
+    try {
+      await runReportCardDMs(client); // idempotent; drains the pending queue
+      const now = new Date();
+      // Post the honor roll once a week (Mondays, 17:00–18:00 UTC window).
+      if (now.getUTCDay() === 1 && now.getUTCHours() === 17) {
+        const wk = isoWeek(now);
+        if (wk !== lastHonorRollWeek) { lastHonorRollWeek = wk; await runHonorRoll(client); }
+      }
+    } catch (e) { console.error("[academy] scheduler tick error:", e.message); }
+  };
+  tick();
+  setInterval(tick, 30 * 60 * 1000).unref?.(); // every 30 min
+  console.log("[academy] scheduler started (report-card DMs + weekly honor roll).");
+}
+
 /* ── Command JSON for registration ──────────────────────────────────────────*/
 function commands() {
   return [buildTeacherApplyCommand(), buildAssignCommand()];
@@ -339,4 +432,4 @@ async function handle(interaction, client) {
   return false;
 }
 
-module.exports = { handle, commands, OWNER_ID };
+module.exports = { handle, commands, scheduleAcademyJobs, OWNER_ID };

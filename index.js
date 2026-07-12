@@ -44,6 +44,9 @@ function canControl(interaction) {
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Tammy live bridge online as ${readyClient.user.tag}`);
   await registerAcademyCommands().catch((error) => console.error("Could not register academy commands:", error.message));
+  // Academy RP scheduler (report-card DMs + weekly honor roll) runs off the
+  // backend API, so it starts regardless of the local Neon connection.
+  academyBridge.scheduleAcademyJobs(client);
   const connected = await db.init();
   if (!connected) {
     console.error("Tammy live feed disabled: fix DATABASE_URL and restart the service.");
