@@ -13,6 +13,10 @@ const client = new Client({ intents: [
   GatewayIntentBits.Guilds,
   GatewayIntentBits.GuildMessages,
   GatewayIntentBits.MessageContent,
+  // Needed to resolve a student's Discord username -> user for report-card DMs.
+  // REQUIRES "Server Members Intent" toggled ON in the Discord Developer Portal
+  // for the Tammy application, or the bot will fail to log in.
+  GatewayIntentBits.GuildMembers,
 ] });
 
 // A bot token's first dot-segment is the base64-encoded application (client) id.
@@ -21,7 +25,7 @@ function clientIdFromToken(t) {
 }
 
 // Tammy is now a SEPARATE Discord application and owns the Academy commands
-// (/academy-teacher-apply, /academy-assign). Registered to the guild for
+// (/academy-teacher-apply, /academy-assign, /academy-note). Registered to the guild for
 // instant availability.
 async function registerAcademyCommands() {
   const clientId = process.env.CLIENT_ID || clientIdFromToken(token);

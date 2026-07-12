@@ -178,6 +178,52 @@ function buildAssignCommand() {
     .toJSON();
 }
 
+function buildAcademyNoteCommand() {
+  return new SlashCommandBuilder()
+    .setName("academy-note")
+    .setDescription("Post a manual teacher note for an Academy student")
+    .addStringOption((o) => o.setName("student").setDescription("Student name or avatar UUID").setRequired(true).setMaxLength(100))
+    .addStringOption((o) => o.setName("note").setDescription("Teacher note shown on the student's ZPad").setRequired(true).setMaxLength(1000))
+    .toJSON();
+}
+
+async function postAcademyNote(interaction) {
+  await interaction.deferReply({ flags: 64 });
+  const studentQuery = interaction.options.getString("student", true).trim();
+  const note = interaction.options.getString("note", true).trim();
+  if (!studentQuery || !note) {
+    await interaction.editReply("Choose a student and enter a note.");
+    return;
+  }
+
+  try {
+    const students = (await backendGet("/academy/admin/students")).students || [];
+    const needle = studentQuery.toLowerCase().replace(/^@/, "");
+    const matches = students.filter((s) =>
+      String(s.avatar_uuid || "").toLowerCase() === needle ||
+      String(s.display_name || "").toLowerCase() === needle ||
+      String(s.discord_username || "").toLowerCase().replace(/^@/, "") === needle);
+    if (!matches.length) {
+      await interaction.editReply(`No active Academy student matched **${studentQuery}**. Use their full display name or avatar UUID.`);
+      return;
+    }
+    if (matches.length > 1) {
+      await interaction.editReply(`More than one student matched **${studentQuery}**. Use the student's avatar UUID.`);
+      return;
+    }
+
+    const student = matches[0];
+    const result = await backendPost("/academy/admin/note", {
+      studentUuid: student.avatar_uuid,
+      note,
+      actor: interaction.user.tag || interaction.user.id,
+    });
+    await interaction.editReply(`✅ Teacher note posted for **${result.student || student.display_name || studentQuery}**. It appears above today's automatic note.`);
+  } catch (e) {
+    await interaction.editReply(`Could not post the teacher note: ${e.message}`);
+  }
+}
+
 const TYPE_EMOJI = { lesson: "📖", quiz: "📝", homework: "🏠", project: "🎨" };
 function assignEmbed(session, statusLine = "") {
   return new EmbedBuilder()
@@ -370,7 +416,7 @@ function scheduleAcademyJobs(client) {
 
 /* ── Command JSON for registration ──────────────────────────────────────────*/
 function commands() {
-  return [buildTeacherApplyCommand(), buildAssignCommand()];
+  return [buildTeacherApplyCommand(), buildAssignCommand(), buildAcademyNoteCommand()];
 }
 
 /** Returns true when the interaction belonged to the Academy bridge. */
@@ -387,6 +433,10 @@ async function handle(interaction, client) {
   if (interaction.isChatInputCommand?.() && interaction.commandName === "academy-assign") {
     if (!isOwner(interaction)) return (await denyNonOwner(interaction), true);
     await startAssignFlow(interaction); return true;
+  }
+  if (interaction.isChatInputCommand?.() && interaction.commandName === "academy-note") {
+    if (!isOwner(interaction)) return (await denyNonOwner(interaction), true);
+    await postAcademyNote(interaction); return true;
   }
   if ((interaction.isStringSelectMenu?.() || interaction.isButton?.()) && interaction.customId?.startsWith("bacademy_assign_")) {
     if (!isOwner(interaction)) return (await denyNonOwner(interaction), true);

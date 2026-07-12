@@ -2,7 +2,7 @@
 
 Tammy is Lifeline's **in-world Second Life staff avatar**, run as a C# [LibreMetaverse](https://github.com/cinderblocks/libremetaverse) worker. She logs into Second Life, greets residents, answers questions, and handles IMs/local chat. The small Node process in this repository only posts the `#tammy-live` feed and handles its buttons; the **main Lifeline Assistant bot** owns slash commands and business workflows.
 
-> Discord-side staff features (tickets, FAQ, redelivery, announcements, applications) live in the **main bot** (`lifeline-discord-bot`). Tammy must **not** duplicate them. She shares the main bot's **Neon** database and reads the **Lifeline backend** for guest context.
+> General Discord-side staff features (tickets, FAQ, redelivery, announcements, and legacy applications) live in the **main bot** (`lifeline-discord-bot`). Tammy owns only the new database-backed Academy Discord flow. She shares the main bot's **Neon** database and reads the **Lifeline backend** for guest context.
 
 ## Architecture
 
@@ -29,8 +29,11 @@ The default start is the cruise boarding point at [Ethereal Paradise (85, 129, 3
 The Discord live bridge also acts as a lightweight concierge. It recognizes common Lifeline intents
 (redelivery, bookings, applications, incidents, HUD/device troubleshooting, jobs, Eats, ZFunds,
 Academy, and more), mentions the member, and directs them to the correct Lifeline Assistant command.
-It never registers duplicate workflow commands. Enable **Message Content Intent** for Tammy's Discord
-application, and optionally restrict responses with `TAMMY_HELP_CHANNEL_IDS`.
+Tammy registers `/academy-teacher-apply`, `/academy-assign`, and `/academy-note`; it does not register
+the legacy CSV/in-world Academy application workflow. Enable **Message Content Intent** and
+**Server Members Intent** for Tammy's Discord application. The members intent is required to resolve
+opted-in students for report-card DMs. Optionally restrict concierge responses with
+`TAMMY_HELP_CHANNEL_IDS`.
 
 ## Action safety tiers (AI never gets unrestricted authority)
 - **Auto**: FAQ, directions, lookups, basic ticket — Tammy does it.
