@@ -26,7 +26,18 @@ const {
 } = require("discord.js");
 const config = require("./config");
 
-const BACKEND_URL = (process.env.LIFELINE_BACKEND_URL || config.BACKEND_URL || "https://lifeline-backend-dfdv.onrender.com").replace(/\/+$/, "");
+// Only accept a real http(s) URL. A malformed env (e.g. a channel id pasted
+// into LIFELINE_BACKEND_URL) would otherwise make every backend call throw
+// "Failed to parse URL", breaking Accept/Deny. Fall back to the known backend.
+const DEFAULT_BACKEND_URL = "https://lifeline-backend-dfdv.onrender.com";
+function cleanBackendUrl(v) {
+  const s = String(v || "").trim().replace(/\/+$/, "");
+  return /^https?:\/\/[^\s/]+/i.test(s) ? s : "";
+}
+const BACKEND_URL = cleanBackendUrl(process.env.LIFELINE_BACKEND_URL) || cleanBackendUrl(config.BACKEND_URL) || DEFAULT_BACKEND_URL;
+if ((process.env.LIFELINE_BACKEND_URL || "").trim() && !cleanBackendUrl(process.env.LIFELINE_BACKEND_URL)) {
+  console.warn(`[academy] Ignoring malformed LIFELINE_BACKEND_URL="${process.env.LIFELINE_BACKEND_URL}"; using ${BACKEND_URL}. Fix this env var in Render.`);
+}
 const ADMIN_SECRET = process.env.ACADEMY_SHARED_SECRET || process.env.ACADEMY_ADMIN_SECRET || config.BACKEND_SECRET || "";
 // Hard lock: only this Discord user may use Academy staff controls.
 const OWNER_ID = process.env.ACADEMY_OWNER_ID || "1197552066269282306";
