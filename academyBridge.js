@@ -371,7 +371,16 @@ async function runReportCardDMs(client) {
   if (!cards?.length) return;
   const delivered = [];
   for (const c of cards) {
-    const user = await resolveGuildUser(client, c.discord_username);
+    // Prefer the stored Discord id (no guild lookup). Fall back to resolving
+    // the username, then persist the id so next time is direct.
+    let user = null;
+    if (c.discord_user_id) user = await client.users.fetch(c.discord_user_id).catch(() => null);
+    if (!user && c.discord_username) {
+      user = await resolveGuildUser(client, c.discord_username);
+      if (user && c.student_uuid) {
+        await backendPost("/academy/admin/link-discord", { studentUuid: c.student_uuid, discordUserId: user.id }).catch(() => {});
+      }
+    }
     if (!user) continue;
     const ok = await user.send({ embeds: [reportCardEmbed(c.display_name || "Scholar", c.data || {})] }).then(() => true).catch(() => false);
     if (ok) delivered.push(c.id);
