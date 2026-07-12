@@ -3,6 +3,7 @@ const { Client, GatewayIntentBits, Events, PermissionFlagsBits, REST, Routes } =
 const db = require("./db");
 const tammyLive = require("./tammyLive");
 const concierge = require("./concierge");
+const academyBridge = require("./academyBridge");
 
 require("dotenv").config();
 
@@ -14,14 +15,26 @@ const client = new Client({ intents: [
   GatewayIntentBits.MessageContent,
 ] });
 
-async function removeLegacyCommands() {
-  const clientId = process.env.CLIENT_ID || "";
+// A bot token's first dot-segment is the base64-encoded application (client) id.
+function clientIdFromToken(t) {
+  try { return Buffer.from(String(t).split(".")[0], "base64").toString("utf8"); } catch { return ""; }
+}
+
+// Tammy is now a SEPARATE Discord application and owns the Academy commands
+// (/academy-teacher-apply, /academy-assign). Registered to the guild for
+// instant availability.
+async function registerAcademyCommands() {
+  const clientId = process.env.CLIENT_ID || clientIdFromToken(token);
   const guildId = process.env.GUILD_ID || "";
-  if (!token || !clientId) return;
+  if (!token || !clientId) {
+    console.warn("Academy commands NOT registered: missing DISCORD_TOKEN or CLIENT_ID.");
+    return;
+  }
   const rest = new REST({ version: "10" }).setToken(token);
-  if (guildId) await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: [] });
-  await rest.put(Routes.applicationCommands(clientId), { body: [] });
-  console.log("Removed Tammy's legacy slash commands; Lifeline Assistant remains the command owner.");
+  const body = academyBridge.commands();
+  if (guildId) await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
+  else await rest.put(Routes.applicationCommands(clientId), { body });
+  console.log(`Registered ${body.length} Tammy Academy command(s)${guildId ? " to guild " + guildId : " globally"}.`);
 }
 
 function canControl(interaction) {
@@ -30,7 +43,7 @@ function canControl(interaction) {
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Tammy live bridge online as ${readyClient.user.tag}`);
-  await removeLegacyCommands().catch((error) => console.error("Could not remove legacy commands:", error.message));
+  await registerAcademyCommands().catch((error) => console.error("Could not register academy commands:", error.message));
   const connected = await db.init();
   if (!connected) {
     console.error("Tammy live feed disabled: fix DATABASE_URL and restart the service.");
@@ -41,6 +54,12 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    // Academy (Tammy owns it): slash commands, application buttons, modals,
+    // and the assign picker's select menus/buttons. Staff actions are
+    // hard-locked to the owner inside the bridge.
+    if (await academyBridge.handle(interaction, client)) return;
+
+    // Tammy live-control buttons/modals (staff via ManageGuild).
     if (!interaction.isButton() && !interaction.isModalSubmit()) return;
     if (!interaction.customId.startsWith("tammylive_")) return;
     if (!canControl(interaction)) {
