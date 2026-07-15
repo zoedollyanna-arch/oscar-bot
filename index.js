@@ -5,6 +5,7 @@ const tammyLive = require("./tammyLive");
 const concierge = require("./concierge");
 const academyBridge = require("./academyBridge");
 const packageReservations = require("./packageReservations");
+const packageCoordination = require("./packageCoordination");
 
 require("dotenv").config();
 
@@ -63,6 +64,7 @@ client.once(Events.ClientReady, async (readyClient) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (await packageReservations.handle(interaction)) return;
+    if (await packageCoordination.handle(interaction)) return;
 
     // Academy (Tammy owns it): slash commands, application buttons, modals,
     // and the assign picker's select menus/buttons. Staff actions are
