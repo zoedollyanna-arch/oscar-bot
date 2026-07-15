@@ -8,6 +8,7 @@ const packageReservations = require("./packageReservations");
 const packageCoordination = require("./packageCoordination");
 const snackConsent = require("./snackConsent");
 const romanceConsent = require("./romanceConsent");
+const cleanupRequest = require("./cleanupRequest");
 
 require("dotenv").config();
 
@@ -69,6 +70,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (await packageCoordination.handle(interaction)) return;
     if (await snackConsent.handle(interaction, db)) return;
     if (await romanceConsent.handle(interaction, db)) return;
+    if (await cleanupRequest.handle(interaction, db)) return;
 
     // Academy (Tammy owns it): slash commands, application buttons, modals,
     // and the assign picker's select menus/buttons. Staff actions are
