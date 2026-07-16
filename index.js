@@ -11,6 +11,7 @@ const romanceConsent = require("./romanceConsent");
 const packageReschedule = require("./packageReschedule");
 const cleanupRequest = require("./cleanupRequest");
 const packageLocation = require("./packageLocation");
+const timeclock = require("./timeclock");
 
 require("dotenv").config();
 
@@ -163,7 +164,17 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-http.createServer((req, res) => {
+http.createServer(async (req, res) => {
+  // Try timeclock routes first
+  if (req.url.startsWith("/api/tammy/timeclock/")) {
+    const handled = await timeclock.handleRequest(req, res);
+    if (!handled) {
+      res.writeHead(404).end(JSON.stringify({ ok: false, error: "not_found" }));
+    }
+    return;
+  }
+
+  // Health / root endpoint
   if (req.url !== "/" && req.url !== "/health") {
     res.writeHead(404).end();
     return;
