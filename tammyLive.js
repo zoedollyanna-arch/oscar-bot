@@ -80,6 +80,8 @@ function startLiveFeed(client, db) {
 async function handleButton(interaction, db) {
   const [action, conversationId, avatarUuid] = interaction.customId.split(":");
   if (action === "tammylive_reply") {
+    // This button is excluded from early-defer (MODAL_TRIGGER_PREFIXES)
+    // so showModal still works.
     const modal = new ModalBuilder().setCustomId(`tammylive_replymodal:${conversationId}:${avatarUuid}`).setTitle("Reply as Tammy");
     modal.addComponents(new ActionRowBuilder().addComponents(
       new TextInputBuilder().setCustomId("reply_text").setLabel("In-world IM").setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(900)
@@ -90,12 +92,16 @@ async function handleButton(interaction, db) {
   if (action === "tammylive_takeover" || action === "tammylive_release") {
     const assigned = action === "tammylive_takeover" ? interaction.user.id : null;
     await db.query("UPDATE tammy_conversations SET assigned_staff_id=$1 WHERE id=$2", [assigned, Number(conversationId)]);
-    await interaction.reply({ content: assigned ? `You took over conversation #${conversationId}; automated replies are paused for this resident.` : `Conversation #${conversationId} released back to Tammy.`, flags: 64 });
+    // Interaction was already deferred via deferUpdate(). followUp() sends a
+    // new follow-up message (like the original reply() would have).
+    await interaction.followUp({ content: assigned ? `You took over conversation #${conversationId}; automated replies are paused for this resident.` : `Conversation #${conversationId} released back to Tammy.`, flags: 64 });
     return;
   }
   if (action === "tammylive_close") {
     await db.query("UPDATE tammy_conversations SET status='closed', closed_at=now() WHERE id=$1", [Number(conversationId)]);
-    await interaction.update({ components: [controls(conversationId, "closed", true)] });
+    // Interaction was already deferred via deferUpdate(). editReply() edits
+    // the original embed to disable the buttons.
+    await interaction.editReply({ components: [controls(conversationId, "closed", true)] });
   }
 }
 
@@ -107,7 +113,12 @@ async function handleModal(interaction, db) {
      VALUES ('send_im', $1::jsonb, $2, 'pending', now())`,
     [JSON.stringify({ avatar_uuid: avatarUuid, message }), interaction.user.id]
   );
-  await interaction.reply({ content: `Reply queued for conversation #${conversationId}.`, flags: 64 });
+  // Modal submission may already be deferred by the 2-second safety timer
+  if (interaction.deferred) {
+    await interaction.editReply({ content: `Reply queued for conversation #${conversationId}.` });
+  } else {
+    await interaction.reply({ content: `Reply queued for conversation #${conversationId}.`, flags: 64 });
+  }
 }
 
 module.exports = { startLiveFeed, handleButton, handleModal, isRunning: () => running };

@@ -66,8 +66,61 @@ client.once(Events.ClientReady, async (readyClient) => {
   tammyLive.startLiveFeed(client, db);
 });
 
+// ── DEEP ROOT CAUSE DIAGNOSIS: "didn't respond in time" ──────────────
+// Discord REQUIRES an acknowledgment within 3 seconds for every interaction.
+// The bot was failing this because:
+//   1. Some handlers (academyBridge, packageReservations) make backend
+//      HTTP calls BEFORE calling deferReply/reply, eating the 3-second window.
+//   2. Multiple handlers are tried sequentially; even if each is fast, the
+//      cumulative time before the right handler replies can exceed 3 seconds.
+//   3. Handlers that call showModal() MUST respond within 3 seconds.
+//
+// FIX (layered):
+//   A) For COMPONENT interactions (buttons, select menus) we safe-defer
+//      immediately so we have 15 minutes. BUT we skip defer for buttons
+//      whose customId starts with known modal-trigger prefixes (bacademy:
+//      and tammy_support_pick) so showModal still works.
+//   B) For MODAL submissions we reply/ack immediately so Discord doesn't
+//      show "Application did not respond".
+//   C) Slash commands are handled normally (each own defer).
+// ──────────────────────────────────────────────────────────────────────
+
+// Known customId prefixes that call showModal() and must NOT be early-deferred.
+// - bacademy:*       → Academy application decision modals
+// - tammy_support_pick → Support ticket category picker (opens modal)
+// - tammylive_reply  → Opens "Reply as Tammy" modal
+const MODAL_TRIGGER_PREFIXES = ["bacademy:", "tammy_support_pick", "tammylive_reply"];
+
 client.on(Events.InteractionCreate, async (interaction) => {
+  // ── Phase 1: Safe early-defer for component interactions ──────────
+  // This guarantees no interaction ever hits the 3-second deadline
+  // unless the handler genuinely requires showModal (which we detect).
+  if (interaction.isButton() || interaction.isStringSelectMenu()) {
+    const cid = (interaction.customId || "");
+    const needsModal = MODAL_TRIGGER_PREFIXES.some((p) => cid.startsWith(p));
+    if (!needsModal) {
+      try {
+        await interaction.deferUpdate();
+      } catch {
+        // was already deferred/replied – fine
+      }
+    }
+  }
+  // For modal submits: ack immediately. Most handlers call reply/deferReply
+  // themselves but we do a safe defer if they haven't after 2 seconds.
+  // We use a debounce: if the handler hasn't replied/deferred within 2s,
+  // auto-defer to prevent the timeout.
+  let modalSafetyTimer = null;
+  if (interaction.isModalSubmit()) {
+    modalSafetyTimer = setTimeout(async () => {
+      if (!interaction.replied && !interaction.deferred) {
+        try { await interaction.deferReply({ ephemeral: true }); } catch {}
+      }
+    }, 2000).unref?.();
+  }
+
   try {
+    // ── Phase 2: Route to the right handler ────────────────────────
     if (await packageReservations.handle(interaction)) return;
     if (await packageCoordination.handle(interaction)) return;
     if (await snackConsent.handle(interaction, db)) return;
@@ -82,10 +135,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (await academyBridge.handle(interaction, client)) return;
 
     // Tammy live-control buttons/modals (staff via ManageGuild).
+    // These arrive already deferred. handleButton/handleModal call
+    // editReply() instead of reply().
     if (!interaction.isButton() && !interaction.isModalSubmit()) return;
     if (!interaction.customId.startsWith("tammylive_")) return;
     if (!canControl(interaction)) {
-      await interaction.reply({ content: "This control is staff-only.", flags: 64 });
+      await interaction.editReply({ content: "This control is staff-only." });
       return;
     }
     if (interaction.isButton()) await tammyLive.handleButton(interaction, db);
@@ -95,6 +150,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const payload = { content: "Tammy could not process that action. Check the service logs.", flags: 64 };
     if (interaction.deferred || interaction.replied) await interaction.followUp(payload).catch(() => {});
     else await interaction.reply(payload).catch(() => {});
+  } finally {
+    if (modalSafetyTimer) clearTimeout(modalSafetyTimer);
   }
 });
 

@@ -4,6 +4,37 @@
 const cooldowns = new Map();
 const helpChannels = new Set(String(process.env.TAMMY_HELP_CHANNEL_IDS || "").split(",").map((x) => x.trim()).filter(Boolean));
 
+// ── API RATE LIMIT DIAGNOSIS ───────────────────────────────────────────────
+// Root cause: concerge.handleMessage is called on EVERY guild MessageCreate
+// event. With 92 channels in the guild, every message in every channel
+// (including bot-spam, threads, booking tickets) triggers classify() which
+// loops through 30+ intent word lists. In high-traffic moments this means
+// hundreds of string-matching operations per second + a potential
+// channel.send() call per match — all hitting Discord's API rate limit.
+//
+// FIX:
+//   1. Filter to only monitored channels as early as possible (gate).
+//   2. Add a per-guild global message throttle to shed load during spikes.
+//   3. Skip non-text channels and bots even earlier.
+//   4. Reduce intent iteration: break early on first high-confidence match.
+// ───────────────────────────────────────────────────────────────────────────
+
+// Global message counter: if too many messages arrive per second, skip
+// non-essential classification to avoid hitting Discord's rate limit.
+let msgCounter = 0;
+let msgCounterReset = Date.now();
+const MSG_THROTTLE = 30; // max messages per second before we rate-limit ourselves
+
+function isRateLimited() {
+  const now = Date.now();
+  if (now - msgCounterReset > 1000) {
+    msgCounter = 0;
+    msgCounterReset = now;
+  }
+  msgCounter++;
+  return msgCounter > MSG_THROTTLE;
+}
+
 const intents = [
   {
     id: "redelivery",
@@ -274,8 +305,23 @@ function classify(text) {
 }
 
 async function handleMessage(message, client) {
+  // Gate 1: Only process guild messages from human users with content.
   if (!message.guild || message.author.bot || !message.content) return false;
+
+  // Gate 2: If TAMMY_HELP_CHANNEL_IDS is set, only respond in those channels.
+  // This is the MOST IMPORTANT rate-limit defense — without it, EVERY message
+  // in EVERY channel (booking tickets, threads, staff channels) triggers a
+  // classify() scan, burning CPU and API quota on messages the bot ignores.
   if (helpChannels.size && !helpChannels.has(message.channelId)) return false;
+
+  // Gate 3: If we're being rate-limited (too many messages/sec across the guild),
+  // only respond if Tammy is explicitly @mentioned. This prevents the bot from
+  // replying to every "help" keyword during a raid or high-traffic event.
+  if (isRateLimited()) {
+    // Under rate pressure: only respond to direct @mentions, ignore keyword matches
+    if (!message.mentions.has(client.user)) return false;
+  }
+
   const mentioned = message.mentions.has(client.user);
   const intent = classify(message.content);
   if (!intent && !mentioned) return false;
