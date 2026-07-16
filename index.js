@@ -8,6 +8,7 @@ const packageReservations = require("./packageReservations");
 const packageCoordination = require("./packageCoordination");
 const snackConsent = require("./snackConsent");
 const romanceConsent = require("./romanceConsent");
+const packageReschedule = require("./packageReschedule");
 const cleanupRequest = require("./cleanupRequest");
 const packageLocation = require("./packageLocation");
 
@@ -71,6 +72,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (await packageCoordination.handle(interaction)) return;
     if (await snackConsent.handle(interaction, db)) return;
     if (await romanceConsent.handle(interaction, db)) return;
+    if (await packageReschedule.handle(interaction, db)) return;
     if (await cleanupRequest.handle(interaction, db)) return;
     if (await packageLocation.handle(interaction, db)) return;
 
