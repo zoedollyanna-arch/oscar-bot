@@ -77,5 +77,3 @@ Blueprint or change/recreate the existing service as Docker; keep it as one web 
 | `TAMMY_LIVE_CHANNEL_ID` | yes for feed | Discord channel receiving in-world messages and controls |
 | `TAMMY_LIVE_POLL_MS` | no | Feed polling interval; default `5000` ms |
 | `TAMMY_HELP_CHANNEL_IDS` | no | Comma-separated Discord channels where Tammy offers keyword help; empty enables all channels |
-| `PORT` | Render sets it | HTTP health-listener port (defaults to `3000` locally) |
-| `TAMMY_HEALTH_SERVER` | no | Set internally to `false` in the combined container; Node owns the port |

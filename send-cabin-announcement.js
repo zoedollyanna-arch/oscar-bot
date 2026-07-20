@@ -20,7 +20,9 @@ const embed = new EmbedBuilder()
     "> 🏡 **Standard Cabins** — Cozy and comfortable for 1–2 guests\n" +
     "> 💑 **Romance Cabins** — Rose petals, candlelit vibes, pure magic 🌹\n" +
     "> 👨‍👩‍👧‍👦 **Family Cabins** — Spacious suites for the whole crew\n" +
-    "> 👑 **Suite & Presidential** — Premium luxury with all the bells & whistles\n\n" +
+    "> �‍👩‍👧‍👦 **Family Cabins** — Spacious suites for the whole crew\n\n" +
+-------
+REPLACE
     "**How to Book:**\n" +
     "> 1️⃣ Head over to the **reservations channel** and run **`/book`**\n" +
     "> 2️⃣ Choose your cabin type, dates, and duration\n" +
