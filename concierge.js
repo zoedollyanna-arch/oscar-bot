@@ -2,7 +2,11 @@
 // reads what a member is asking, answers like a friendly staff member would, and points them to the
 // right command. Replies are player-facing: warm, factual, and free of internal/staff-only wording.
 const cooldowns = new Map();
-const helpChannels = new Set(String(process.env.TAMMY_HELP_CHANNEL_IDS || "").split(",").map((x) => x.trim()).filter(Boolean));
+// Tammy may ONLY auto-respond in these channels. TAMMY_HELP_CHANNEL_IDS overrides, but the
+// default is hard-coded so a missing env var can never open her up to the whole guild again
+// (that's what caused the spam: unset var -> empty set -> the gate below never applied).
+const DEFAULT_HELP_CHANNEL_IDS = "1428520362525855914,1428521877285896303,1428524276176257076";
+const helpChannels = new Set(String(process.env.TAMMY_HELP_CHANNEL_IDS || DEFAULT_HELP_CHANNEL_IDS).split(",").map((x) => x.trim()).filter(Boolean));
 
 // ── API RATE LIMIT DIAGNOSIS ───────────────────────────────────────────────
 // Root cause: concerge.handleMessage is called on EVERY guild MessageCreate
@@ -114,7 +118,7 @@ const intents = [
       "affiliate", "affiliate program", "partner store", "become a partner", "partner with", "affiliate apply",
       "affiliate status", "affiliate program details",
     ],
-    reply: "Use **`/affiliate start`** for the program details, **`/affiliate apply`** to apply, or **`/affiliate status`** to check where your application stands.",
+    reply: "Interested in partnering with Lifeline? Open **`/support`** and ask about the affiliate program — the team will share the tier details and get your application going.",
   },
   {
     id: "blogger",
