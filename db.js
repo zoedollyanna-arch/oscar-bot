@@ -16,6 +16,25 @@ let pool = null;
 let ready = false;
 let initPromise = null;
 
+// Auto-retry state: a failed init (e.g. Neon suspended for quota at the moment the bot boots)
+// used to be permanent — the bot ran memory-only until the next manual restart even after Neon
+// came back, silently dropping writes. Now we retry with capped backoff.
+let retryTimer = null;
+let retryDelayMs = 5000;
+const RETRY_DELAY_MAX_MS = 5 * 60 * 1000;
+
+function scheduleRetry() {
+  if (retryTimer) return;
+  const delay = retryDelayMs;
+  retryDelayMs = Math.min(retryDelayMs * 2, RETRY_DELAY_MAX_MS);
+  console.warn(`↻ Postgres unavailable — retrying init in ${Math.round(delay / 1000)}s.`);
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    init().catch(() => {});
+  }, delay);
+  if (retryTimer.unref) retryTimer.unref();
+}
+
 // store key → { table, keyCol } for the generic JSONB stores.
 const STORES = {
   bloggers:            { table: "bloggers",            keyCol: "discord_id" },
@@ -200,6 +219,7 @@ async function init() {
       `);
 
       ready = true;
+      retryDelayMs = 5000;
       console.log("✅ Neon Postgres ready (data + settings + notifications).");
       return true;
     } catch (e) {
@@ -210,6 +230,7 @@ async function init() {
         pool = null;
       }
       initPromise = null;
+      scheduleRetry();
       return false;
     }
   })();
