@@ -1,0 +1,62 @@
+# /etc/systemd/system/littlelinks-fleet.service
+#
+#   sudo cp littlelinks-fleet.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now littlelinks-fleet
+#   journalctl -u littlelinks-fleet -f
+
+[Unit]
+Description=LittleLinks bot fleet (Second Life baby avatars)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=littlelinks
+Group=littlelinks
+WorkingDirectory=/opt/littlelinks-fleet
+
+# EnvironmentFile must be 0600 and owned by root — it holds the fleet
+# secret and the database URL. The RSA private key is NOT in here; it is a
+# separate file referenced by LITTLELINKS_FLEET_PRIVATE_KEY_FILE, so that
+# the most sensitive material never enters the process environment (which
+# is readable via /proc and is captured by most crash reporters).
+EnvironmentFile=/etc/littlelinks/fleet.env
+
+ExecStart=/usr/bin/dotnet /opt/littlelinks-fleet/LittleLinksFleet.dll
+
+Restart=always
+RestartSec=15
+
+# Long enough for every claimed avatar to log out cleanly in parallel.
+# Killing the process instead leaves the babies looking online until the
+# grid times the sessions out, which confuses parents watching the portal.
+TimeoutStopSec=60
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=littlelinks-fleet
+
+# ── Hardening ────────────────────────────────────────────────────────
+# This process holds a key that opens Second Life passwords. Give it as
+# little of the host as it can run with.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# The asset cache is the only thing it needs to write.
+ReadWritePaths=/opt/littlelinks-fleet/cache
+
+# Core dumps of this process would contain decrypted passwords.
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

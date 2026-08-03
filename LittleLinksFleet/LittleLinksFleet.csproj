@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>LittleLinksFleet</AssemblyName>
+    <RootNamespace>LittleLinksFleet</RootNamespace>
+    <!-- Same reason as TammyAgent: this project sits outside the
+         LibreMetaverse folder and so does not inherit that subtree's
+         central package management. Versions are pinned inline. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Credentials are read straight from Postgres. They deliberately do
+         not travel over the API, so the fleet needs its own connection. -->
+    <PackageReference Include="Npgsql" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Lets the envelope test exercise CredentialStore.OpenEnvelope, which
+         is internal rather than public so it cannot be used as a decryption
+         oracle. See the comment on that method. -->
+    <InternalsVisibleTo Include="LittleLinksFleet.Tests" />
+  </ItemGroup>
+
+  <!-- Path is overridable so the fleet can be built on the EC2 host from a
+       checkout laid out differently to the dev machine:
+           dotnet build -p:LibreMetaversePath=/opt/libremetaverse
+       It is a property, not an item, so it must be resolved before the
+       ProjectReference below is evaluated. -->
+  <PropertyGroup>
+    <LibreMetaversePath Condition="'$(LibreMetaversePath)' == ''">..\libremetaverse-master</LibreMetaversePath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(LibreMetaversePath)\LibreMetaverse\LibreMetaverse.csproj" />
+  </ItemGroup>
+
+</Project>
