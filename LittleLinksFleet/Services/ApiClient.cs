@@ -103,6 +103,27 @@ namespace LittleLinksFleet.Services
             }
         }
 
+        /// <summary>
+        /// Read a command id that may arrive as a JSON number or a JSON string.
+        ///
+        /// littlelinks_bot_commands.id is a bigint, and node-postgres returns
+        /// bigint as a string to avoid losing precision -- so the API emits
+        /// {"id": "4"}. JsonElement.TryGetInt64 *throws* on a String element
+        /// rather than returning false, which killed the whole drain: the API
+        /// had already marked the batch claimed, so every command the portal
+        /// issued was silently accepted and never executed.
+        /// </summary>
+        private static long CommandId(JsonElement row)
+        {
+            if (!row.TryGetProperty("id", out var id)) return 0;
+            return id.ValueKind switch
+            {
+                JsonValueKind.Number => id.TryGetInt64(out var n) ? n : 0,
+                JsonValueKind.String => long.TryParse(id.GetString(), out var s) ? s : 0,
+                _ => 0,
+            };
+        }
+
         /// <summary>Drain pending commands. The API marks them claimed as it returns them.</summary>
         public async Task<List<BotCommand>> CommandsAsync(string botKey, CancellationToken ct)
         {
@@ -120,7 +141,7 @@ namespace LittleLinksFleet.Services
                 {
                     result.Add(new BotCommand
                     {
-                        Id = row.TryGetProperty("id", out var id) && id.TryGetInt64(out var v) ? v : 0,
+                        Id = CommandId(row),
                         Command = Str(row, "command"),
                         // Clone: the JsonDocument backing this element is
                         // disposed when the response is, and the command is
