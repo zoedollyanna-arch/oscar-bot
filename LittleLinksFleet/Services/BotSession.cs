@@ -33,6 +33,10 @@ namespace LittleLinksFleet.Services
         private int _loginFailures;
         private DateTime _lastInventorySync = DateTime.MinValue;
 
+        /// <summary>0 or 1. Guards against overlapping inventory walks now
+        /// that the resync runs off the command loop rather than on it.</summary>
+        private int _inventorySyncRunning;
+
         private Task _connectionLoop, _commandLoop, _heartbeatLoop;
 
         /// <summary>Set when the API says desired_state is no longer 'online'.</summary>
@@ -318,7 +322,11 @@ namespace LittleLinksFleet.Services
                 await SyncInventoryAsync(items, ct);
                 _lastInventorySync = DateTime.UtcNow;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            // As above: an inner per-call timeout must not escape as a
+            // cancellation, or it tears down the connection loop for a baby
+            // that is standing in world perfectly happily.
+            catch (Exception ex) when (ex is not OperationCanceledException
+                                       || !ct.IsCancellationRequested)
             {
                 Console.Error.WriteLine($"[{Label}] post-login setup failed: {ex.Message}");
                 await _api.StatusAsync(BotKey, "online", "online, setup incomplete",
@@ -382,6 +390,14 @@ namespace LittleLinksFleet.Services
                     }
                 }
                 Console.WriteLine($"[{Label}] HUD not among {(worn?.Count ?? 0)} worn items; checking inventory");
+                return false;
+            }
+            // The 45s cap above cancels its own linked token, not ct. That is
+            // "I could not look", not "the session is going away", and letting
+            // it escape as a cancellation killed the caller's loop.
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                Console.Error.WriteLine($"[{Label}] worn-item check timed out after 45s");
                 return false;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -617,49 +633,81 @@ namespace LittleLinksFleet.Services
                 // would mark them done against an avatar that never acted.
                 if (!Online) continue;
 
-                List<BotCommand> commands;
-                try { commands = await _api.CommandsAsync(BotKey, ct); }
-                catch (OperationCanceledException) { break; }
-
-                foreach (var cmd in commands)
+                // Only a real shutdown ends this loop.
+                //
+                // Every OperationCanceledException used to break out of it,
+                // including one raised by an inner per-call timeout rather than
+                // by ct -- for example the 45s cap on the worn-item check. The
+                // loop then ended silently while the heartbeat and connection
+                // loops kept running, so the baby looked perfectly healthy in
+                // the portal while every button the parent pressed sat pending
+                // forever. Cancellation that is not ours is treated as a failed
+                // iteration, not as a reason to stop serving the parent.
+                try
                 {
-                    if (ct.IsCancellationRequested) break;
-                    CommandResult result;
-                    try
+                    var commands = await _api.CommandsAsync(BotKey, ct);
+
+                    foreach (var cmd in commands)
                     {
-                        result = await ExecuteAsync(cmd, ct);
+                        if (ct.IsCancellationRequested) break;
+                        CommandResult result;
+                        try
+                        {
+                            result = await ExecuteAsync(cmd, ct);
+                        }
+                        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                        {
+                            result = CommandResult.Failure("timed out");
+                        }
+                        catch (Exception ex)
+                        {
+                            result = CommandResult.Failure(ex.Message);
+                        }
+                        Console.WriteLine($"[{Label}] {cmd.Command} -> {(result.Ok ? "ok" : "FAILED")}: {result.Message}");
+                        await _api.CommandResultAsync(cmd.Id, result.Ok, result.Message, ct);
                     }
-                    catch (OperationCanceledException) { break; }
-                    catch (Exception ex)
-                    {
-                        result = CommandResult.Failure(ex.Message);
-                    }
-                    Console.WriteLine($"[{Label}] {cmd.Command} -> {(result.Ok ? "ok" : "FAILED")}: {result.Message}");
-                    await _api.CommandResultAsync(cmd.Id, result.Ok, result.Message, ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[{Label}] command loop iteration failed: {ex.Message}");
                 }
 
-                if (DateTime.UtcNow - _lastInventorySync > _cfg.InventorySyncInterval)
+                // The inventory resync runs on its own task, not inline.
+                //
+                // A folder walk can burn its full two-minute budget when the
+                // region is not serving the inventory capability, and while it
+                // did that on this loop it also blocked command draining -- so
+                // a parent pressing a wardrobe button could wait two minutes
+                // for anything to happen. Commands are the interactive path
+                // and must never queue behind bookkeeping.
+                if (DateTime.UtcNow - _lastInventorySync > _cfg.InventorySyncInterval
+                    && Interlocked.CompareExchange(ref _inventorySyncRunning, 1, 0) == 0)
                 {
                     _lastInventorySync = DateTime.UtcNow;
-                    try
+                    _ = Task.Run(async () =>
                     {
-                        var fresh = await FetchInventoryAsync(ct);
-                        await SyncInventoryAsync(fresh, ct);
-
-                        // A baby without its HUD reports no stats, so it is
-                        // not usable even though it is logged in. Retry here
-                        // rather than requiring a restart: the usual cause is
-                        // a region that was not serving inventory at login.
-                        if (!_hudAttached && fresh.Count > 0)
+                        try
                         {
-                            _hudAttached = await HudAlreadyWornAsync(ct) || await WearHudAsync(fresh, ct);
-                            if (_hudAttached)
-                                await _api.StatusAsync(BotKey, "online", "online with HUD",
-                                                       Region, Position, true, "", ct);
+                            var fresh = await FetchInventoryAsync(ct);
+                            await SyncInventoryAsync(fresh, ct);
+
+                            // A baby without its HUD reports no stats, so it is
+                            // not usable even though it is logged in. Retry here
+                            // rather than requiring a restart: the usual cause is
+                            // a region that was not serving inventory at login.
+                            if (!_hudAttached && fresh.Count > 0)
+                            {
+                                _hudAttached = await HudAlreadyWornAsync(ct) || await WearHudAsync(fresh, ct);
+                                if (_hudAttached)
+                                    await _api.StatusAsync(BotKey, "online", "online with HUD",
+                                                           Region, Position, true, "", ct);
+                            }
                         }
-                    }
-                    catch (OperationCanceledException) { break; }
-                    catch (Exception ex) { Console.Error.WriteLine($"[{Label}] inventory resync: {ex.Message}"); }
+                        catch (OperationCanceledException) { /* session going away */ }
+                        catch (Exception ex) { Console.Error.WriteLine($"[{Label}] inventory resync: {ex.Message}"); }
+                        finally { Interlocked.Exchange(ref _inventorySyncRunning, 0); }
+                    }, ct);
                 }
             }
         }
