@@ -11,7 +11,15 @@
          LibreMetaverse folder and so does not inherit that subtree's
          central package management. Versions are pinned inline. -->
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
-    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- InvariantGlobalization MUST stay off. LibreMetaverse.Types.Utils has
+         a static `new CultureInfo("en-us")`; under invariant globalization
+         that throws CultureNotFoundException, which fails the type
+         initializer and surfaces as:
+             login error: The type initializer for 'LibreMetaverse.Utils'
+             threw an exception.
+         The bot then never logs in, with nothing pointing at the cause. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>

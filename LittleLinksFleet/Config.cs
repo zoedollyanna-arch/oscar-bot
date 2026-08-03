@@ -63,7 +63,7 @@ namespace LittleLinksFleet
                 PrivateKeyPem = ResolvePrivateKey(),
                 WorkerId      = Env("FLEET_WORKER_ID", $"{Environment.MachineName}-{Environment.ProcessId}"),
                 Capacity      = Math.Clamp(EnvInt("FLEET_CAPACITY", 10), 1, 50),
-                HudItemName   = Env("LITTLELINKS_HUD_ITEM", "Lifeline RP Hybrid HUD"),
+                HudItemName   = Env("LITTLELINKS_HUD_ITEM", "[Lifeline RP] Main Hybrid HUD"),
                 DefaultStartLocation = Env("LITTLELINKS_START_LOCATION", "last"),
                 HealthPort    = EnvInt("PORT", 3010),
 

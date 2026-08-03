@@ -1,3 +1,4 @@
+using System.Text;
 using LibreMetaverse;
 using LittleLinksFleet.Models;
 
@@ -172,6 +173,22 @@ namespace LittleLinksFleet.Services
             // ALL_CAPS fields older libomv code uses.
             _client.Settings.Agent.MultipleSims = false;
             _client.Settings.Agent.SendUpdates = true;
+
+            // Do not let the library push an appearance automatically.
+            //
+            // AppearanceManager hooks CapabilitiesReceived and, on a
+            // server-baking region like Second Life, immediately sends the
+            // agent's outfit built from the Current Outfit Folder. When the
+            // region has not served the inventory capability the COF reads
+            // back empty, so what gets sent is a *partial* outfit — and the
+            // sim then detaches everything missing from it. That is why
+            // logging a baby on and off was stripping items the parent had
+            // dressed her in.
+            //
+            // Re-enabled in AfterLoginAsync only once the COF is proven
+            // readable. Until then Second Life keeps the appearance it
+            // already has stored, which is the correct one.
+            _client.Settings.Agent.SendAppearance = false;
             _client.Settings.World.AlwaysDecodeObjects = false;
             _client.Settings.World.AlwaysRequestObjects = false;
             _client.Settings.World.TrackObjects = false;
@@ -200,27 +217,112 @@ namespace LittleLinksFleet.Services
         /// </summary>
         private async Task AfterLoginAsync(CancellationToken ct)
         {
+            // Report online FIRST. The avatar is in world the moment login
+            // returns; making that visible wait on an inventory walk meant a
+            // slow or stalled walk left the portal showing "connecting"
+            // forever for a baby who was demonstrably standing in a region.
+            await _api.StatusAsync(BotKey, "online", "online", Region, Position, false, "", ct);
+
             try
             {
-                // Give the simulator a moment to hand over inventory caps;
-                // asking immediately reliably returns an empty root folder.
-                await Delay(5, ct);
+                // Settle: inventory caps are not ready the instant login
+                // returns, and asking too early yields an empty root.
+                await Delay(10, ct);
 
-                var items = await FetchInventoryAsync(ct);
-                _hudAttached = await WearHudAsync(items, ct);
+                // Cheapest correct path first. A baby whose HUD was already
+                // attached when its owner logged out comes back wearing it,
+                // and asking the worn set is one call — no folder walk, and
+                // it cannot be defeated by a slow inventory fetch.
+                // Up to three passes. A region that declines the inventory
+                // capability immediately after login ("cap not found") often
+                // serves it a minute later, and both the worn-set check and
+                // the folder walk come back empty until it does. Concluding
+                // "HUD not found" from that transient state marks a perfectly
+                // healthy baby as broken in the parent's portal.
+                List<InventoryItem> items = new();
+                var inventoryReady = false;
 
+                for (var attempt = 1; attempt <= 3; attempt++)
+                {
+                    if (await HudAlreadyWornAsync(ct)) { _hudAttached = true; break; }
+
+                    items = await FetchInventoryAsync(ct);
+                    if (items.Count > 0)
+                    {
+                        inventoryReady = true;
+                        _hudAttached = await WearHudAsync(items, ct);
+                        break;
+                    }
+
+                    if (attempt < 3)
+                    {
+                        Console.WriteLine($"[{Label}] inventory not available yet (attempt {attempt}/3); retrying in 30s");
+                        await Delay(30, ct);
+                    }
+                }
+
+                // "HUD not found" and "could not look" are different failures
+                // and want different answers from the parent: one means send
+                // the baby a HUD, the other means wait or move region.
+                var detail = _hudAttached  ? "online with HUD"
+                           : inventoryReady ? "online, HUD not found"
+                                            : "online, inventory unavailable";
+                var error  = _hudAttached  ? ""
+                           : inventoryReady ? $"No attachable inventory object matching \"{_cfg.HudItemName}\"."
+                                            : "Second Life did not serve this region's inventory capability, so the HUD could not be located. Retrying automatically.";
+
+                await _api.StatusAsync(BotKey, "online", detail, Region, Position, _hudAttached, error, ct);
+
+                // Now, and only now, hand appearance back to the library. A
+                // non-empty COF or a successful inventory walk both prove the
+                // region is serving inventory, so an outfit built from it will
+                // be complete rather than a partial one that strips the baby.
+                if (_lastWornCount > 0 || inventoryReady)
+                {
+                    _client.Settings.Agent.SendAppearance = true;
+                    try
+                    {
+                        // Bounded wait, not a bounded bake. A server-side bake
+                        // can legitimately take a while and there is no reason
+                        // to cancel it -- but nothing after this point may sit
+                        // behind it, which is the same mistake that once left a
+                        // logged-in baby reporting "connecting" forever.
+                        var appearance = _client.Appearance.RequestSetAppearance(false);
+                        var finished = await Task.WhenAny(appearance, Task.Delay(TimeSpan.FromSeconds(90), ct));
+
+                        if (finished == appearance)
+                        {
+                            await appearance;
+                            Console.WriteLine($"[{Label}] appearance enabled ({_lastWornCount} worn items seen)");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[{Label}] appearance still baking after 90s; carrying on without it");
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        Console.Error.WriteLine($"[{Label}] appearance request failed: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    Console.Error.WriteLine(
+                        $"[{Label}] leaving appearance untouched - the outfit folder could not be read, " +
+                        "and sending a partial outfit would detach items the parent dressed her in");
+                }
+
+                // Inventory is a convenience for the wardrobe screen, not a
+                // precondition for the baby being usable. Best effort, and
+                // never allowed to hold up anything above it.
                 await SyncInventoryAsync(items, ct);
                 _lastInventorySync = DateTime.UtcNow;
-
-                await _api.StatusAsync(BotKey, "online",
-                    _hudAttached ? "online with HUD" : "online, HUD not found",
-                    Region, Position, _hudAttached,
-                    _hudAttached ? "" : $"Inventory has no item named \"{_cfg.HudItemName}\".", ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Console.Error.WriteLine($"[{Label}] post-login setup failed: {ex.Message}");
-                await _api.StatusAsync(BotKey, "online", "online, setup incomplete", Region, Position, false, ex.Message, ct);
+                await _api.StatusAsync(BotKey, "online", "online, setup incomplete",
+                    Region, Position, _hudAttached, ex.Message, ct);
             }
         }
 
@@ -243,6 +345,52 @@ namespace LittleLinksFleet.Services
         /// not a worker that spends ten minutes fetching folders and misses
         /// every heartbeat while it does.
         /// </summary>
+        /// <summary>
+        /// Is the HUD already attached? One call, no folder walk.
+        ///
+        /// This is the normal case, not an edge case: parents attach the HUD
+        /// to the baby and log out, and Second Life restores attachments on
+        /// the next login. Checking it first also means a baby stays usable
+        /// when the inventory fetch is slow or comes back empty.
+        /// </summary>
+        /// <summary>
+        /// Worn items seen by the last <see cref="HudAlreadyWornAsync"/> call.
+        /// Zero means the Current Outfit Folder could not be read, which is a
+        /// different thing from the avatar wearing nothing — see the
+        /// SendAppearance note where the client is configured.
+        /// </summary>
+        private int _lastWornCount;
+
+        private async Task<bool> HudAlreadyWornAsync(CancellationToken ct)
+        {
+            var want = _cfg.HudItemName.Trim();
+            _lastWornCount = 0;
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeout.CancelAfter(TimeSpan.FromSeconds(45));
+
+                var worn = await _client.Appearance.RequestAgentWornAsync(timeout.Token);
+                _lastWornCount = worn?.Count ?? 0;
+                foreach (var entry in worn ?? new List<InventoryBase>())
+                {
+                    var name = entry?.Name ?? "";
+                    if (HudNameMatches(name, want))
+                    {
+                        Console.WriteLine($"[{Label}] HUD already worn: {name}");
+                        return true;
+                    }
+                }
+                Console.WriteLine($"[{Label}] HUD not among {(worn?.Count ?? 0)} worn items; checking inventory");
+                return false;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Console.Error.WriteLine($"[{Label}] worn-item check failed: {ex.Message}");
+                return false;
+            }
+        }
+
         private async Task<List<InventoryItem>> FetchInventoryAsync(CancellationToken ct)
         {
             var found = new List<InventoryItem>();
@@ -257,16 +405,38 @@ namespace LittleLinksFleet.Services
             queue.Enqueue((store.RootFolder.UUID, "", 0));
             var seen = new HashSet<UUID>();
 
+            // Hard wall-clock budget for the whole walk. Second Life can
+            // leave a folder request outstanding indefinitely, and an
+            // unbounded walk is what left a logged-in baby stuck reporting
+            // "connecting" — the walk never returned, so nothing after it ran.
+            var deadline = DateTime.UtcNow.AddMinutes(2);
+
             while (queue.Count > 0 && found.Count < 3000)
             {
+                if (DateTime.UtcNow > deadline)
+                {
+                    Console.Error.WriteLine($"[{Label}] inventory walk hit its 2 minute budget; using {found.Count} items so far");
+                    break;
+                }
+
                 var (folder, path, depth) = queue.Dequeue();
                 if (depth > 12 || !seen.Add(folder)) continue;
 
                 List<InventoryBase> contents;
                 try
                 {
+                    // Per-folder timeout as well as the overall budget: one
+                    // stuck folder must not consume the whole allowance.
+                    using var perFolder = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    perFolder.CancelAfter(TimeSpan.FromSeconds(20));
+
                     contents = await _client.Inventory.FolderContentsAsync(
-                        folder, _client.Self.AgentID, true, true, InventorySortOrder.ByName, ct);
+                        folder, _client.Self.AgentID, true, true, InventorySortOrder.ByName, perFolder.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    Console.Error.WriteLine($"[{Label}] folder fetch timed out; skipping");
+                    continue;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -294,9 +464,27 @@ namespace LittleLinksFleet.Services
 
         private readonly Dictionary<UUID, string> _folderOf = new();
 
-        /// <summary>Push the cached wardrobe to the API so the portal can render it.</summary>
+        /// <summary>
+        /// Push the cached wardrobe to the API so the portal can render it.
+        ///
+        /// An empty walk is never published. The sync is a full replace on the
+        /// server, and Second Life fails inventory by returning nothing rather
+        /// than by erroring — when a region declines to serve the inventory
+        /// capability the walk completes "successfully" with zero items. Left
+        /// unguarded that deletes a parent's entire wardrobe from the portal,
+        /// which is what happened to a 1063-item inventory during testing.
+        /// A baby genuinely owning nothing is not a case worth supporting.
+        /// </summary>
         private async Task SyncInventoryAsync(List<InventoryItem> items, CancellationToken ct)
         {
+            if (items.Count == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[{Label}] inventory walk returned 0 items - not publishing, " +
+                    "keeping the last good wardrobe (region likely not serving the inventory capability)");
+                return;
+            }
+
             var snapshot = new List<InventorySnapshotItem>(items.Count);
             foreach (var item in items)
             {
@@ -319,24 +507,76 @@ namespace LittleLinksFleet.Services
         }
 
         /// <summary>
-        /// Find the HUD by name and wear it. Matching is case-insensitive
-        /// and prefix-based so "Lifeline RP Hybrid HUD v6.9.8" still matches
-        /// a configured name of "Lifeline RP Hybrid HUD" — parents rename
-        /// and version their HUDs, and an exact match would break on the
-        /// first update.
+        /// Reduce a HUD name to letters, digits and single spaces, lowercased,
+        /// so punctuation and bracket style stop mattering. The real product is
+        /// named "[Lifeline RP] Main Hybrid HUD v1.3.19"; a configured name of
+        /// "Lifeline RP Hybrid HUD" has to find it, and plain prefix matching
+        /// never could — the brackets alone defeat it.
+        /// </summary>
+        private static string NormalizeHudName(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new StringBuilder(s.Length);
+            var lastWasSpace = true;
+            foreach (var ch in s)
+            {
+                if (char.IsLetterOrDigit(ch)) { sb.Append(char.ToLowerInvariant(ch)); lastWasSpace = false; }
+                else if (!lastWasSpace) { sb.Append(' '); lastWasSpace = true; }
+            }
+            return sb.ToString().Trim();
+        }
+
+        /// <summary>
+        /// Does <paramref name="name"/> name the configured HUD?
+        ///
+        /// Every word of the configured name must appear in the item name.
+        /// That is deliberately looser than a prefix and deliberately tighter
+        /// than a substring: it survives version suffixes, bracket styles and
+        /// inserted words like "Main", while still refusing an item that is
+        /// merely adjacent. Callers restrict the candidate set to attachable
+        /// objects, so a notecard named after the HUD cannot win.
+        /// </summary>
+        private static bool HudNameMatches(string name, string want)
+        {
+            var n = NormalizeHudName(name);
+            var w = NormalizeHudName(want);
+            if (n.Length == 0 || w.Length == 0) return false;
+            if (n == w || n.StartsWith(w, StringComparison.Ordinal)) return true;
+
+            var haystack = n.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
+            return w.Split(' ', StringSplitOptions.RemoveEmptyEntries).All(haystack.Contains);
+        }
+
+        /// <summary>
+        /// Find the HUD by name and wear it.
+        ///
+        /// Two rules beyond name matching, both learned from the real product:
+        /// only attachable objects are considered, because the HUD ships
+        /// alongside a notecard and a landmark with near-identical names; and
+        /// when several versions match, the most recently received one wins,
+        /// since that is the update the parent was just given.
         /// </summary>
         private async Task<bool> WearHudAsync(List<InventoryItem> items, CancellationToken ct)
         {
             var want = _cfg.HudItemName.Trim();
 
-            var hud = items.FirstOrDefault(i =>
+            var candidates = items
+                .Where(i => i?.Name != null && i.AssetType == AssetType.Object)
+                .ToList();
+
+            // Exact name always wins outright — if a parent configured the
+            // full name, honour it rather than second-guessing by date.
+            var hud = candidates.FirstOrDefault(i =>
                         string.Equals(i.Name, want, StringComparison.OrdinalIgnoreCase))
-                   ?? items.FirstOrDefault(i =>
-                        i.Name != null && i.Name.StartsWith(want, StringComparison.OrdinalIgnoreCase));
+                   ?? candidates.Where(i => HudNameMatches(i.Name, want))
+                                .OrderByDescending(i => i.CreationDate)
+                                .FirstOrDefault();
 
             if (hud == null)
             {
-                Console.Error.WriteLine($"[{Label}] no inventory item matching \"{want}\"");
+                Console.Error.WriteLine(
+                    $"[{Label}] no attachable inventory object matching \"{want}\" " +
+                    $"among {candidates.Count} objects ({items.Count} items total)");
                 return false;
             }
 
@@ -401,7 +641,23 @@ namespace LittleLinksFleet.Services
                 if (DateTime.UtcNow - _lastInventorySync > _cfg.InventorySyncInterval)
                 {
                     _lastInventorySync = DateTime.UtcNow;
-                    try { await SyncInventoryAsync(await FetchInventoryAsync(ct), ct); }
+                    try
+                    {
+                        var fresh = await FetchInventoryAsync(ct);
+                        await SyncInventoryAsync(fresh, ct);
+
+                        // A baby without its HUD reports no stats, so it is
+                        // not usable even though it is logged in. Retry here
+                        // rather than requiring a restart: the usual cause is
+                        // a region that was not serving inventory at login.
+                        if (!_hudAttached && fresh.Count > 0)
+                        {
+                            _hudAttached = await HudAlreadyWornAsync(ct) || await WearHudAsync(fresh, ct);
+                            if (_hudAttached)
+                                await _api.StatusAsync(BotKey, "online", "online with HUD",
+                                                       Region, Position, true, "", ct);
+                        }
+                    }
                     catch (OperationCanceledException) { break; }
                     catch (Exception ex) { Console.Error.WriteLine($"[{Label}] inventory resync: {ex.Message}"); }
                 }
