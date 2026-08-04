@@ -61,7 +61,6 @@ namespace LittleLinksFleet.Services
                         // Default closed: anything other than an explicit
                         // true leaves the expensive tier switched off.
                         AllowWorldTouch = Bool(row, "allow_world_touch"),
-                        AllowRlv        = Bool(row, "allow_rlv"),
                     });
                 }
             }

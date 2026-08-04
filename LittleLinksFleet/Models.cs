@@ -23,12 +23,6 @@ namespace LittleLinksFleet.Models
         /// </summary>
         public bool AllowWorldTouch { get; set; }
 
-        /// <summary>
-        /// Top-tier only: listen for third-party RLV commands and honour the
-        /// verbs that can be translated. A bot is not a viewer, so this is a
-        /// translation layer over a subset, never real RLV support.
-        /// </summary>
-        public bool AllowRlv { get; set; }
 
         /// <summary>What the portal shows. Nickname wins, as parents set it.</summary>
         public string Label =>
