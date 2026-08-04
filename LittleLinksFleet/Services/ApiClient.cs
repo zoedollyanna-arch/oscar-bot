@@ -58,6 +58,10 @@ namespace LittleLinksFleet.Services
                         DisplayName   = Str(row, "display_name"),
                         Nickname      = Str(row, "nickname"),
                         StartLocation = Str(row, "start_location"),
+                        // Default closed: anything other than an explicit
+                        // true leaves the expensive tier switched off.
+                        AllowWorldTouch = Bool(row, "allow_world_touch"),
+                        AllowRlv        = Bool(row, "allow_rlv"),
                     });
                 }
             }
@@ -182,6 +186,19 @@ namespace LittleLinksFleet.Services
                && el.TryGetProperty(name, out var v)
                && v.ValueKind == JsonValueKind.String
                 ? v.GetString() ?? "" : "";
+
+        /// <summary>
+        /// Read a boolean that must default to false.
+        ///
+        /// These gate paid capabilities, so anything ambiguous — a missing
+        /// field, a null, an older API that does not send it — has to mean
+        /// "not entitled". Never treat a present-but-unparsable value as
+        /// permission.
+        /// </summary>
+        private static bool Bool(JsonElement el, string name)
+            => el.ValueKind == JsonValueKind.Object
+               && el.TryGetProperty(name, out var v)
+               && v.ValueKind == JsonValueKind.True;
 
         public void Dispose() => _http.Dispose();
     }

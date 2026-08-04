@@ -193,9 +193,26 @@ namespace LittleLinksFleet.Services
             // readable. Until then Second Life keeps the appearance it
             // already has stored, which is the correct one.
             _client.Settings.Agent.SendAppearance = false;
-            _client.Settings.World.AlwaysDecodeObjects = false;
-            _client.Settings.World.AlwaysRequestObjects = false;
-            _client.Settings.World.TrackObjects = false;
+            /* Object tracking is the fleet's biggest memory cost, so it is
+               a paid capability rather than a default.
+
+               OFF (Basic/Family/Nursery): the sim's object store is not
+               kept, which is what holds a baby to 60-90 MB. The dashboard
+               can still operate the baby's own attachments — the HUD, the
+               AO, an eye lock — because those arrive as part of the agent's
+               own appearance rather than from the world store.
+
+               ON (Unlimited): the world store is kept, so the dashboard can
+               touch a crib, a vendor or a door. On a busy sim this is what
+               makes a fleet host fall over, which is exactly why it is
+               limited to the tier that pays for the headroom.
+
+               This must be decided before login — the client reads it while
+               connecting, so flipping it afterwards would mean logging the
+               avatar out and back in. */
+            _client.Settings.World.AlwaysDecodeObjects  = _bot.AllowWorldTouch;
+            _client.Settings.World.AlwaysRequestObjects = _bot.AllowWorldTouch;
+            _client.Settings.World.TrackObjects         = _bot.AllowWorldTouch;
             _client.Settings.World.TrackAvatars = false;
             _client.Settings.World.StoreLandPatches = false;
             _client.Settings.Parcel.TrackParcels = false;
@@ -721,6 +738,9 @@ namespace LittleLinksFleet.Services
                         ? CommandResult.Success("HUD attached")
                         : CommandResult.Failure($"No inventory item named \"{_cfg.HudItemName}\"");
 
+                case "touch_worn":    return await TouchWornAsync(cmd, ct);
+                case "touch_object":  return await TouchObjectAsync(cmd, ct);
+
                 case "wear_item":     return await WearItemAsync(cmd, ct);
                 case "detach_item":   return DetachItem(cmd);
                 case "wear_outfit":   return await WearOutfitAsync(cmd, ct);
@@ -785,6 +805,151 @@ namespace LittleLinksFleet.Services
             if (!UUID.TryParse(target, out var id)) return CommandResult.Failure("item_key must be a UUID");
             _client.Appearance.Detach(id);
             return CommandResult.Success("detached");
+        }
+
+        /* ═══════════════════════ Touching things ════════════════════ */
+
+        /// <summary>
+        /// Find one of this avatar's own attachments by inventory item id or
+        /// by name, and return its LocalID.
+        ///
+        /// Touching needs a LocalID, not the inventory UUID the portal knows
+        /// about, and the two are unrelated — so the prim has to be found in
+        /// the simulator. Attachments are the prims whose ParentID is this
+        /// agent, which is why this works even with world tracking off:
+        /// an avatar's own attachments arrive with its appearance.
+        /// </summary>
+        private uint FindWornLocalId(string itemKeyOrName)
+        {
+            var sim = _client.Network.CurrentSim;
+            if (sim == null) return 0;
+
+            var me = _client.Self.LocalID;
+            if (me == 0) return 0;
+
+            UUID.TryParse(itemKeyOrName, out var wantId);
+            var wantName = itemKeyOrName.Trim();
+
+            foreach (var kv in sim.ObjectsPrimitives)
+            {
+                var prim = kv.Value;
+                if (prim == null || prim.ParentID != me) continue;
+
+                // Exact inventory-item match first: a parent may own two
+                // things with the same name and mean a specific one.
+                if (wantId != UUID.Zero && prim.Properties != null
+                    && prim.Properties.ItemID == wantId)
+                    return prim.LocalID;
+
+                var name = prim.Properties?.Name;
+                if (!string.IsNullOrEmpty(name)
+                    && HudNameMatches(name, wantName))
+                    return prim.LocalID;
+            }
+            return 0;
+        }
+
+        /// <summary>
+        /// Touch something the baby is wearing — the HUD, an AO, an eye lock.
+        ///
+        /// Available on every plan. This is how Lifeline's own content is
+        /// operated, so gating it would make a Basic subscriber's baby
+        /// unusable rather than merely less capable.
+        /// </summary>
+        private async Task<CommandResult> TouchWornAsync(BotCommand cmd, CancellationToken ct)
+        {
+            var target = cmd.ArgString("item", cmd.ArgString("item_key", cmd.ArgString("name")));
+            if (string.IsNullOrWhiteSpace(target))
+                return CommandResult.Failure("item_key or name required");
+
+            var local = FindWornLocalId(target);
+
+            // Properties arrive asynchronously, so a first miss is often just
+            // "not asked yet" rather than "not there". Ask, wait briefly, retry.
+            if (local == 0)
+            {
+                var sim = _client.Network.CurrentSim;
+                if (sim != null)
+                {
+                    foreach (var kv in sim.ObjectsPrimitives)
+                    {
+                        var prim = kv.Value;
+                        if (prim != null && prim.ParentID == _client.Self.LocalID
+                            && prim.Properties == null)
+                        {
+                            _client.Objects.RequestObjectPropertiesFamily(sim, prim.ID);
+                        }
+                    }
+                    await Delay(3, ct);
+                    local = FindWornLocalId(target);
+                }
+            }
+
+            if (local == 0)
+                return CommandResult.Failure($"nothing worn matching \"{target}\"");
+
+            _client.Self.Touch(local);
+            return CommandResult.Success($"touched {target}");
+        }
+
+        /// <summary>
+        /// Touch an object in the world — a crib, a vendor, a door.
+        ///
+        /// Requires the world-touch capability, because it requires the
+        /// object store, which is off for everyone else. The refusal is
+        /// explicit rather than an empty search result: "we found nothing"
+        /// and "your plan does not track the world" look identical from the
+        /// portal, and only one of them is fixed by upgrading.
+        /// </summary>
+        private async Task<CommandResult> TouchObjectAsync(BotCommand cmd, CancellationToken ct)
+        {
+            if (!_bot.AllowWorldTouch)
+                return CommandResult.Failure(
+                    "touching objects in the world needs the Unlimited plan; "
+                  + "this baby's own attachments can still be touched");
+
+            var sim = _client.Network.CurrentSim;
+            if (sim == null) return CommandResult.Failure("not in a region");
+
+            // Accept a LocalID directly, or an object UUID to look up.
+            var localArg = cmd.ArgString("local_id");
+            if (uint.TryParse(localArg, out var direct) && direct != 0)
+            {
+                _client.Self.Touch(direct);
+                return CommandResult.Success($"touched local {direct}");
+            }
+
+            var target = cmd.ArgString("object_key", cmd.ArgString("name"));
+            if (string.IsNullOrWhiteSpace(target))
+                return CommandResult.Failure("local_id, object_key or name required");
+
+            UUID.TryParse(target, out var wantId);
+            uint found = 0;
+
+            foreach (var kv in sim.ObjectsPrimitives)
+            {
+                var prim = kv.Value;
+                if (prim == null) continue;
+
+                if (wantId != UUID.Zero && prim.ID == wantId) { found = prim.LocalID; break; }
+
+                var name = prim.Properties?.Name;
+                if (wantId == UUID.Zero && !string.IsNullOrEmpty(name)
+                    && HudNameMatches(name, target))
+                {
+                    found = prim.LocalID;
+                    break;
+                }
+            }
+
+            if (found == 0)
+            {
+                await Delay(1, ct);
+                return CommandResult.Failure($"no object nearby matching \"{target}\"");
+            }
+
+            _client.Self.Touch(found);
+            return CommandResult.Success($"touched {target}");
         }
 
         /// <summary>

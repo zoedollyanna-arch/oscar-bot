@@ -11,6 +11,25 @@ namespace LittleLinksFleet.Models
         public string Nickname { get; set; } = "";
         public string StartLocation { get; set; } = "";
 
+        /// <summary>
+        /// Top-tier only: track objects in the world, not just what this
+        /// baby is wearing, so the dashboard can touch a crib or a vendor.
+        ///
+        /// This is the expensive one. Object tracking is what turns 60-90 MB
+        /// per baby into several hundred on a busy sim, which is why it is
+        /// off by default and sold with the Unlimited plan. It must be set
+        /// before login: the setting is read as the client connects, so
+        /// changing it later would mean reconnecting the avatar.
+        /// </summary>
+        public bool AllowWorldTouch { get; set; }
+
+        /// <summary>
+        /// Top-tier only: listen for third-party RLV commands and honour the
+        /// verbs that can be translated. A bot is not a viewer, so this is a
+        /// translation layer over a subset, never real RLV support.
+        /// </summary>
+        public bool AllowRlv { get; set; }
+
         /// <summary>What the portal shows. Nickname wins, as parents set it.</summary>
         public string Label =>
             !string.IsNullOrWhiteSpace(Nickname) ? Nickname
