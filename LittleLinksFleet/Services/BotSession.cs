@@ -1407,15 +1407,19 @@ namespace LittleLinksFleet.Services
         /// Affection: a spoken reaction plus a small bond/mood gain. The
         /// stat side is applied by the API when it enqueues the command
         /// (stats are the server's job, the say is ours) — this method is
-        /// only the in-world half.
+        /// only the in-world half. The target must actually be in the
+        /// region: a hug aimed at nobody would just have the baby talk to
+        /// the air, so the command fails instead of playing out.
         /// </summary>
         private async Task<CommandResult> AffectionAsync(BotCommand cmd, CancellationToken ct)
         {
             var target = cmd.ArgString("target");
-            var name = TargetName(target);
+            var avatar = FindAvatar(target);
+            if (avatar == null)
+                return CommandResult.Failure($"no avatar named \"{target}\" is in {Region}");
             var line = cmd.ArgString("text");
             if (string.IsNullOrWhiteSpace(line))
-                line = $"wiggles happily and wraps {name} in a big hug.";
+                line = $"wiggles happily and wraps {avatar.Name} in a big hug.";
             _client.Self.Chat(line, 0, ChatType.Normal);
             await TryPlayAnimationAsync(cmd.ArgString("animation"), ct);
             return CommandResult.Success("affection shown");
@@ -1425,31 +1429,24 @@ namespace LittleLinksFleet.Services
         /// Hold: the baby is "picked up" — stood up from anything it was
         /// sitting on, follows nothing, and snuggles against the parent.
         /// Same division of labour as AffectionAsync: say here, stats at
-        /// the API.
+        /// the API. Like affection, it needs a real target in the region.
         /// </summary>
         private async Task<CommandResult> HoldAsync(BotCommand cmd, CancellationToken ct)
         {
+            var target = cmd.ArgString("target");
+            var avatar = FindAvatar(target);
+            if (avatar == null)
+                return CommandResult.Failure($"no avatar named \"{target}\" is in {Region}");
+
             if (_client.Self.SittingOn != 0) _client.Self.Stand();
             StopFollowing();
 
-            var target = cmd.ArgString("target");
-            var name = TargetName(target);
             var line = cmd.ArgString("text");
             if (string.IsNullOrWhiteSpace(line))
-                line = $"snuggles into {name}'s arms, all warm and safe.";
+                line = $"snuggles into {avatar.Name}'s arms, all warm and safe.";
             _client.Self.Chat(line, 0, ChatType.Normal);
             await TryPlayAnimationAsync(cmd.ArgString("animation"), ct);
             return CommandResult.Success("held");
-        }
-
-        /// <summary>Display name of a target avatar, or the raw key when
-        /// the avatar is not in the region.</summary>
-        private string TargetName(string target)
-        {
-            if (string.IsNullOrWhiteSpace(target)) return "you";
-            var avatar = FindAvatar(target);
-            if (avatar != null && !string.IsNullOrWhiteSpace(avatar.Name)) return avatar.Name;
-            return UUID.TryParse(target, out var id) && id != UUID.Zero ? id.ToString() : target;
         }
 
         /* ── Destructive verbs ──────────────────────────────────────
