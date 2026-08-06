@@ -306,6 +306,13 @@ namespace LittleLinksFleet.Services
                     }
                 }
 
+                // The head controller is worn on the skull and parents click
+                // it for in-world actions. Optional, never blocking: a baby
+                // without the object is unaffected. The list is empty when
+                // the HUD was already worn, in which case WearHeadAsync
+                // fetches what it needs itself.
+                await WearHeadAsync(items, ct);
+
                 // "HUD not found" and "could not look" are different failures
                 // and want different answers from the parent: one means send
                 // the baby a HUD, the other means wait or move region.
@@ -661,6 +668,48 @@ namespace LittleLinksFleet.Services
             }
         }
 
+        /// <summary>
+        /// Wear the invisible head controller on the skull, if the baby has
+        /// one. The item is optional scenery: the fleet must not fail or
+        /// block because of it, so every miss is a quiet return. The passed
+        /// list is reused when it is non-empty; otherwise the inventory is
+        /// fetched, because the caller often only walked it to find the HUD.
+        /// </summary>
+        private async Task<bool> WearHeadAsync(List<InventoryItem>? items, CancellationToken ct)
+        {
+            var want = _cfg.HeadItemName.Trim();
+            if (string.IsNullOrWhiteSpace(want)) return false;
+
+            if (items == null || items.Count == 0) items = await FetchInventoryAsync(ct);
+
+            var head = items
+                .Where(i => i?.Name != null && i.AssetType == AssetType.Object)
+                .FirstOrDefault(i => string.Equals(i.Name, want, StringComparison.OrdinalIgnoreCase))
+                ?? items.Where(i => i?.Name != null && i.AssetType == AssetType.Object)
+                        .Where(i => HudNameMatches(i.Name, want))
+                        .OrderByDescending(i => i.CreationDate)
+                        .FirstOrDefault();
+
+            if (head == null) return false;
+
+            try
+            {
+                if (_client.Appearance.isItemAttached(head.UUID)) return true;
+
+                _client.Appearance.Attach(head, AttachmentPoint.Skull, replace: false);
+                await Delay(3, ct);
+
+                var ok = _client.Appearance.isItemAttached(head.UUID);
+                if (ok) Console.WriteLine($"[{Label}] head controller attached: {head.Name}");
+                return ok;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Console.Error.WriteLine($"[{Label}] head attach failed: {ex.Message}");
+                return false;
+            }
+        }
+
         /* ═══════════════════════════ Commands ═══════════════════════ */
 
         private async Task CommandLoopAsync(CancellationToken ct)
@@ -733,6 +782,14 @@ namespace LittleLinksFleet.Services
                             var fresh = await FetchInventoryAsync(ct);
                             await SyncInventoryAsync(fresh, ct);
 
+                            // The head controller parents click for in-world
+                            // actions. Optional scenery: it is worn whenever
+                            // the baby has the item, and nothing else changes
+                            // if it does not. Re-checked here rather than only
+                            // at login, so adding the object to the inventory
+                            // later still picks it up on the next resync.
+                            await WearHeadAsync(fresh, ct);
+
                             // A baby without its HUD reports no stats, so it is
                             // not usable even though it is logged in. Retry here
                             // rather than requiring a restart: the usual cause is
@@ -777,7 +834,9 @@ namespace LittleLinksFleet.Services
                 case "return_home":   return await ReturnHomeAsync(ct);
                 case "say":           return Say(cmd);
                 case "im":            return SendIm(cmd);
-                case "animate":       return Animate(cmd);
+                case "animate":       return await AnimateAsync(cmd, ct);
+                case "affection":     return await AffectionAsync(cmd, ct);
+                case "hold":          return await HoldAsync(cmd, ct);
                 case "sync_inventory":
                     await SyncInventoryAsync(await FetchInventoryAsync(ct), ct);
                     return CommandResult.Success("inventory synced");
@@ -1034,8 +1093,30 @@ namespace LittleLinksFleet.Services
                     "sitting on objects in the world needs the PREMIUM plan; "
                   + "this baby's own attachments can still be touched");
 
-            var target = cmd.ArgString("target", cmd.ArgString("object_key"));
-            if (!UUID.TryParse(target, out var id)) return CommandResult.Failure("target must be an object UUID");
+            UUID id;
+            var with = cmd.ArgString("with");
+            if (!string.IsNullOrWhiteSpace(with))
+            {
+                // "Sit with me": the head controller's lap-sit. The baby
+                // takes the seat the clicker is currently sitting on, so
+                // the parent sits on the couch first and one click later
+                // the baby is cuddled in next to them.
+                var avatar = FindAvatar(with);
+                if (avatar == null)
+                    return CommandResult.Failure($"no avatar named \"{with}\" is in {Region}");
+                if (avatar.SittingOn == 0)
+                    return CommandResult.Failure($"{avatar.Name} is not sitting on anything");
+                if (_client.Network.CurrentSim?.ObjectsPrims.TryGetValue(avatar.SittingOn, out var prim) != true || prim == null)
+                    return CommandResult.Failure("cannot see what that avatar is sitting on");
+                id = prim.UUID;
+            }
+            else
+            {
+                var target = cmd.ArgString("target", cmd.ArgString("object_key"));
+                if (!UUID.TryParse(target, out var targetId))
+                    return CommandResult.Failure("target must be an object UUID");
+                id = targetId;
+            }
 
             var offset = new Vector3(cmd.ArgFloat("offset_x", 0f), cmd.ArgFloat("offset_y", 0f), cmd.ArgFloat("offset_z", 0f));
             _client.Self.RequestSit(id, offset);
@@ -1269,13 +1350,91 @@ namespace LittleLinksFleet.Services
             return CommandResult.Success("sent");
         }
 
-        private CommandResult Animate(BotCommand cmd)
+        private async Task<CommandResult> AnimateAsync(BotCommand cmd, CancellationToken ct)
         {
             var anim = cmd.ArgString("animation");
-            if (!UUID.TryParse(anim, out var id)) return CommandResult.Failure("animation must be a UUID");
+            if (string.IsNullOrWhiteSpace(anim)) return CommandResult.Failure("animation required");
+
+            // A UUID is honoured as-is; anything else is looked up in the
+            // baby's own inventory by name, so callers can refer to an
+            // animation without shipping a UUID around.
+            if (!UUID.TryParse(anim, out var id))
+            {
+                var item = await FindItemAsync(anim, ct);
+                if (item == null || item.InventoryType != InventoryType.Animation)
+                    return CommandResult.Failure($"no animation named \"{anim}\" in inventory");
+                id = item.UUID;
+            }
             if (cmd.ArgBool("stop")) _client.Self.AnimationStop(id, true);
             else _client.Self.AnimationStart(id, true);
             return CommandResult.Success("ok");
+        }
+
+        /// <summary>
+        /// Best-effort animation playback for the affection verbs: the
+        /// animation is optional scenery and its absence must never fail
+        /// the action itself. Accepts a UUID or an inventory name.
+        /// </summary>
+        private async Task TryPlayAnimationAsync(string anim, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(anim)) return;
+            if (UUID.TryParse(anim, out var id))
+            {
+                _client.Self.AnimationStart(id, true);
+                return;
+            }
+            var item = await FindItemAsync(anim, ct);
+            if (item?.InventoryType == InventoryType.Animation)
+                _client.Self.AnimationStart(item.UUID, true);
+        }
+
+        /// <summary>
+        /// Affection: a spoken reaction plus a small bond/mood gain. The
+        /// stat side is applied by the API when it enqueues the command
+        /// (stats are the server's job, the say is ours) — this method is
+        /// only the in-world half.
+        /// </summary>
+        private async Task<CommandResult> AffectionAsync(BotCommand cmd, CancellationToken ct)
+        {
+            var target = cmd.ArgString("target");
+            var name = TargetName(target);
+            var line = cmd.ArgString("text");
+            if (string.IsNullOrWhiteSpace(line))
+                line = $"wiggles happily and wraps {name} in a big hug.";
+            _client.Self.Chat(line, 0, ChatType.Normal);
+            await TryPlayAnimationAsync(cmd.ArgString("animation"), ct);
+            return CommandResult.Success("affection shown");
+        }
+
+        /// <summary>
+        /// Hold: the baby is "picked up" — stood up from anything it was
+        /// sitting on, follows nothing, and snuggles against the parent.
+        /// Same division of labour as AffectionAsync: say here, stats at
+        /// the API.
+        /// </summary>
+        private async Task<CommandResult> HoldAsync(BotCommand cmd, CancellationToken ct)
+        {
+            if (_client.Self.SittingOn != 0) _client.Self.Stand();
+            StopFollowing();
+
+            var target = cmd.ArgString("target");
+            var name = TargetName(target);
+            var line = cmd.ArgString("text");
+            if (string.IsNullOrWhiteSpace(line))
+                line = $"snuggles into {name}'s arms, all warm and safe.";
+            _client.Self.Chat(line, 0, ChatType.Normal);
+            await TryPlayAnimationAsync(cmd.ArgString("animation"), ct);
+            return CommandResult.Success("held");
+        }
+
+        /// <summary>Display name of a target avatar, or the raw key when
+        /// the avatar is not in the region.</summary>
+        private string TargetName(string target)
+        {
+            if (string.IsNullOrWhiteSpace(target)) return "you";
+            var avatar = FindAvatar(target);
+            if (avatar != null && !string.IsNullOrWhiteSpace(avatar.Name)) return avatar.Name;
+            return UUID.TryParse(target, out var id) && id != UUID.Zero ? id.ToString() : target;
         }
 
         /* ── Destructive verbs ──────────────────────────────────────

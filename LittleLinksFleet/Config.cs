@@ -27,6 +27,11 @@ namespace LittleLinksFleet
         /// <summary>Inventory item name the worker wears to give a baby its HUD.</summary>
         public string HudItemName { get; private set; }
 
+        /// <summary>Optional inventory object worn on the skull: the invisible
+        /// head controller parents click for in-world actions. Attached on
+        /// sync whenever the item exists; a baby without one is unaffected.</summary>
+        public string HeadItemName { get; private set; }
+
         public string DefaultStartLocation { get; private set; }
         public int HealthPort { get; private set; }
 
@@ -68,6 +73,7 @@ namespace LittleLinksFleet
                 WorkerId      = Env("FLEET_WORKER_ID", $"{Environment.MachineName}-{Environment.ProcessId}"),
                 Capacity      = Math.Clamp(EnvInt("FLEET_CAPACITY", 10), 1, 50),
                 HudItemName   = Env("LITTLELINKS_HUD_ITEM", "[Lifeline RP] Main Hybrid HUD"),
+                HeadItemName  = Env("LITTLELINKS_HEAD_ITEM", "LittleLinks Baby Head"),
                 DefaultStartLocation = Env("LITTLELINKS_START_LOCATION", "last"),
                 HealthPort    = EnvInt("PORT", 3010),
 
@@ -114,7 +120,7 @@ namespace LittleLinksFleet
         {
             Console.WriteLine($"[cfg] worker={WorkerId} capacity={Capacity}");
             Console.WriteLine($"[cfg] api={ApiBaseUrl}");
-            Console.WriteLine($"[cfg] hud item=\"{HudItemName}\" start={DefaultStartLocation}");
+            Console.WriteLine($"[cfg] hud item=\"{HudItemName}\" head item=\"{HeadItemName}\" start={DefaultStartLocation}");
             Console.WriteLine($"[cfg] claim={ClaimInterval.TotalSeconds:0}s heartbeat={HeartbeatInterval.TotalSeconds:0}s "
                             + $"commands={CommandPollInterval.TotalSeconds:0}s inventory={InventorySyncInterval.TotalSeconds:0}s "
                             + $"sweep={ObjectSweepInterval.TotalSeconds:0}s");
