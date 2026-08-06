@@ -1097,18 +1097,33 @@ namespace LittleLinksFleet.Services
             var with = cmd.ArgString("with");
             if (!string.IsNullOrWhiteSpace(with))
             {
-                // "Sit with me": the head controller's lap-sit. The baby
-                // takes the seat the clicker is currently sitting on, so
-                // the parent sits on the couch first and one click later
-                // the baby is cuddled in next to them.
+                // "Sit with me": the head controller's lap-sit. LibreMetaverse
+                // does not track what prim another avatar is sitting on, so
+                // the baby takes the closest sit-capable object to the clicker
+                // — the seat the parent is on, found through the same full
+                // ObjectProperties that the region sweep uses. The parent sits
+                // on the couch first and one click later the baby is cuddled
+                // in next to them.
                 var avatar = FindAvatar(with);
                 if (avatar == null)
                     return CommandResult.Failure($"no avatar named \"{with}\" is in {Region}");
-                if (avatar.SittingOn == 0)
-                    return CommandResult.Failure($"{avatar.Name} is not sitting on anything");
-                if (_client.Network.CurrentSim?.ObjectsPrims.TryGetValue(avatar.SittingOn, out var prim) != true || prim == null)
-                    return CommandResult.Failure("cannot see what that avatar is sitting on");
-                id = prim.UUID;
+                var sim = _client.Network.CurrentSim;
+                if (sim == null)
+                    return CommandResult.Failure("not connected to a region");
+                Primitive best = null;
+                var bestDist = float.MaxValue;
+                foreach (var kv in sim.ObjectsPrimitives)
+                {
+                    var prim = kv.Value;
+                    if (prim == null || prim.ParentID == _client.Self.LocalID) continue;
+                    var props = prim.Properties;
+                    if (props == null || string.IsNullOrWhiteSpace(props.SitName)) continue;
+                    var d = Vector3.Distance(prim.Position, avatar.Position);
+                    if (d < bestDist) { bestDist = d; best = prim; }
+                }
+                if (best == null)
+                    return CommandResult.Failure($"{avatar.Name} is not near any sit-capable object");
+                id = best.ID;
             }
             else
             {
