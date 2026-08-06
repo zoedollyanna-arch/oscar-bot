@@ -11,17 +11,17 @@ namespace LittleLinksFleet.Models
         public string Nickname { get; set; } = "";
         public string StartLocation { get; set; } = "";
 
-        /// <summary>
-        /// Top-tier only: track objects in the world, not just what this
-        /// baby is wearing, so the dashboard can touch a crib or a vendor.
-        ///
-        /// This is the expensive one. Object tracking is what turns 60-90 MB
-        /// per baby into several hundred on a busy sim, which is why it is
-        /// off by default and sold with the Unlimited plan. It must be set
-        /// before login: the setting is read as the client connects, so
-        /// changing it later would mean reconnecting the avatar.
-        /// </summary>
-        public bool AllowWorldTouch { get; set; }
+/// <summary>
+    /// Top-tier only: track objects in the world, not just what this
+    /// baby is wearing, so the dashboard can touch a crib or a vendor.
+    ///
+    /// This is the expensive one. Object tracking is what turns 60-90 MB
+    /// per baby into several hundred on a busy sim, which is why it is
+    /// off by default and sold with the PREMIUM plan. It must be set
+    /// before login: the setting is read as the client connects, so
+    /// changing it later would mean reconnecting the avatar.
+    /// </summary>
+    public bool AllowWorldTouch { get; set; }
 
 
         /// <summary>What the portal shows. Nickname wins, as parents set it.</summary>
@@ -101,6 +101,20 @@ namespace LittleLinksFleet.Models
         public string folder { get; set; } = "";
         public bool is_worn { get; set; }
         public string attach_point { get; set; } = "";
+    }
+
+    /// <summary>
+    /// One sit-capable object from the premium region sweep, as the API
+    /// expects it on POST /fleet/:bot_key/detected-objects.
+    /// </summary>
+    public sealed class DetectedObject
+    {
+        public string object_key { get; set; } = "";
+        public string name { get; set; } = "";
+        public string region { get; set; } = "";
+        public float pos_x { get; set; }
+        public float pos_y { get; set; }
+        public float pos_z { get; set; }
     }
 
     /// <summary>Outcome of one command, reported back to the API verbatim.</summary>

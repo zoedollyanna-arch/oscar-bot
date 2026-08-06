@@ -37,6 +37,18 @@ namespace LittleLinksFleet.Services
         /// that the resync runs off the command loop rather than on it.</summary>
         private int _inventorySyncRunning;
 
+        /// <summary>Last time the premium region sweep ran (or never).</summary>
+        private DateTime _lastObjectSweep = DateTime.MinValue;
+
+        /// <summary>0 or 1. Guards against overlapping region sweeps.</summary>
+        private int _objectSweepRunning;
+
+        /// <summary>Avatar the baby is currently following, or zero.</summary>
+        private UUID _followTarget = UUID.Zero;
+
+        /// <summary>Stops the follow loop; null when not following.</summary>
+        private CancellationTokenSource? _followCts;
+
         private Task _connectionLoop, _commandLoop, _heartbeatLoop;
 
         /// <summary>Set when the API says desired_state is no longer 'online'.</summary>
@@ -167,6 +179,16 @@ namespace LittleLinksFleet.Services
         {
             _client = new GridClient();
 
+            // Both tiers auto-accept inventory offers and teleport offers.
+            // These are grid-level courtesies, not the world-touch
+            // capability — no object store is involved, so STANDARD plans
+            // get them too. A gift arriving while the parent is away should
+            // land in inventory, not sit as a dialog nobody is there to
+            // click, and a caregiver teleporting the baby to them should
+            // just work.
+            _client.Inventory.InventoryObjectOffered += (_, e) => e.Accept = true;
+            _client.Network.RegisterCallback(PacketType.TeleportRequest, OnTeleportOffer);
+
             // Babies are driven, not autonomous: everything that would make
             // the client chatty on the wire is off. This matters at scale —
             // twenty avatars each decoding every object update on a busy sim
@@ -202,9 +224,10 @@ namespace LittleLinksFleet.Services
                AO, an eye lock — because those arrive as part of the agent's
                own appearance rather than from the world store.
 
-               ON (Unlimited): the world store is kept, so the dashboard can
-               touch a crib, a vendor or a door. On a busy sim this is what
-               makes a fleet host fall over, which is exactly why it is
+               ON (PREMIUM): the world store is kept, so the dashboard can
+               touch a crib, a vendor or a door — and can list the region's
+               sit-capable objects for the Sit button. On a busy sim this is
+               what makes a fleet host fall over, which is exactly why it is
                limited to the tier that pays for the headroom.
 
                This must be decided before login — the client reads it while
@@ -213,7 +236,7 @@ namespace LittleLinksFleet.Services
             _client.Settings.World.AlwaysDecodeObjects  = _bot.AllowWorldTouch;
             _client.Settings.World.AlwaysRequestObjects = _bot.AllowWorldTouch;
             _client.Settings.World.TrackObjects         = _bot.AllowWorldTouch;
-            _client.Settings.World.TrackAvatars = false;
+            _client.Settings.World.TrackAvatars = true;
             _client.Settings.World.StoreLandPatches = false;
             _client.Settings.Parcel.TrackParcels = false;
             _client.Settings.Parcel.AlwaysRequestAcl = false;
@@ -747,6 +770,10 @@ namespace LittleLinksFleet.Services
                 case "sit":           return await SitAsync(cmd, ct);
                 case "stand":         return Stand();
                 case "teleport":      return await TeleportAsync(cmd, ct);
+                case "follow":        return await FollowAsync(cmd, ct);
+                case "stop_following": return StopFollowing();
+                case "teleport_to":   return await TeleportToAsync(cmd, ct);
+                case "return_home":   return await ReturnHomeAsync(ct);
                 case "say":           return Say(cmd);
                 case "im":            return SendIm(cmd);
                 case "animate":       return Animate(cmd);
@@ -905,7 +932,7 @@ namespace LittleLinksFleet.Services
         {
             if (!_bot.AllowWorldTouch)
                 return CommandResult.Failure(
-                    "touching objects in the world needs the Unlimited plan; "
+                    "touching objects in the world needs the PREMIUM plan; "
                   + "this baby's own attachments can still be touched");
 
             var sim = _client.Network.CurrentSim;
@@ -992,9 +1019,20 @@ namespace LittleLinksFleet.Services
         /// Sit on a target prim. The furniture script publishes the marker
         /// prim's key, so the portal and the HUD both send a real object
         /// UUID here rather than a position guess.
+        ///
+        /// Sitting is the other half of world touch, so it carries the same
+        /// premium gate: the server rejects it for standard plans, but the
+        /// baby is usually sat through the portal anyway, where a misleading
+        /// "no such seat" beats an upgrade prompt — this makes the refusal
+        /// explicit on the fleet side too.
         /// </summary>
         private async Task<CommandResult> SitAsync(BotCommand cmd, CancellationToken ct)
         {
+            if (!_bot.AllowWorldTouch)
+                return CommandResult.Failure(
+                    "sitting on objects in the world needs the PREMIUM plan; "
+                  + "this baby's own attachments can still be touched");
+
             var target = cmd.ArgString("target", cmd.ArgString("object_key"));
             if (!UUID.TryParse(target, out var id)) return CommandResult.Failure("target must be an object UUID");
 
@@ -1007,6 +1045,8 @@ namespace LittleLinksFleet.Services
 
         private CommandResult Stand()
         {
+            if (!_bot.AllowWorldTouch)
+                return CommandResult.Failure("standing is a PREMIUM action");
             _client.Self.Stand();
             return CommandResult.Success("standing");
         }
@@ -1020,6 +1060,193 @@ namespace LittleLinksFleet.Services
             var ok = await _client.Self.TeleportAsync(region, pos, ct);
             return ok ? CommandResult.Success($"teleported to {region}")
                       : CommandResult.Failure($"teleport to {region} failed: {_client.Self.TeleportMessage}");
+        }
+
+        /// <summary>
+        /// Follow an avatar — the caregiver, a friend, anyone in the
+        /// region. The baby paths to the target's current position every
+        /// few seconds, so it keeps up as the target moves, and it stands
+        /// first if it was sitting. Premium: avatar tracking is the sibling
+        /// of object tracking, and a baby wandering on autopilot is exactly
+        /// the behaviour worth selling.
+        /// </summary>
+        private async Task<CommandResult> FollowAsync(BotCommand cmd, CancellationToken ct)
+        {
+            if (!_bot.AllowWorldTouch)
+                return CommandResult.Failure("following avatars needs the PREMIUM plan");
+
+            var target = cmd.ArgString("target");
+            if (string.IsNullOrWhiteSpace(target)) return CommandResult.Failure("target (avatar UUID or name) required");
+
+            if (!UUID.TryParse(target, out var wantId) || wantId == UUID.Zero)
+            {
+                wantId = FindAvatar(target)?.ID ?? UUID.Zero;
+                if (wantId == UUID.Zero)
+                    return CommandResult.Failure($"no avatar named \"{target}\" is in {Region}");
+            }
+
+            StopFollowing();
+            _followTarget = wantId;
+            var cts = new CancellationTokenSource();
+            _followCts = cts;
+            _ = Task.Run(() => FollowLoopAsync(wantId, cts.Token), ct);
+            return CommandResult.Success($"following {wantId}");
+        }
+
+        private async Task FollowLoopAsync(UUID target, CancellationToken ct)
+        {
+            var misses = 0;
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    var pos = FindAvatarPosition(target);
+                    if (pos == null)
+                    {
+                        if (++misses >= 6)
+                        {
+                            Console.WriteLine($"[{Label}] follow target left the region — stopping");
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        misses = 0;
+                        if (_client.Self.SittingOn != 0) _client.Self.Stand();
+                        _client.Self.AutoPilotLocal((int)pos.Value.X, (int)pos.Value.Y, pos.Value.Z);
+                    }
+                    await Delay(5, ct);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex) { Console.Error.WriteLine($"[{Label}] follow: {ex.Message}"); break; }
+            }
+            _client.Self.AutoPilotCancel();
+        }
+
+        private CommandResult StopFollowing()
+        {
+            var was = _followCts != null;
+            _followCts?.Cancel();
+            _followCts?.Dispose();
+            _followCts = null;
+            _followTarget = UUID.Zero;
+            _client.Self.AutoPilotCancel();
+            return CommandResult.Success(was ? "stopped following" : "already standing still");
+        }
+
+        /// <summary>
+        /// Teleport straight to an avatar in the same region — the quick
+        /// way to put the baby at the caregiver's side. Both tiers: this
+        /// needs no more than the avatar list the client already keeps.
+        /// </summary>
+        private async Task<CommandResult> TeleportToAsync(BotCommand cmd, CancellationToken ct)
+        {
+            var target = cmd.ArgString("target");
+            if (string.IsNullOrWhiteSpace(target)) return CommandResult.Failure("target (avatar UUID or name) required");
+
+            var avatar = FindAvatar(target);
+            if (avatar == null)
+                return CommandResult.Failure($"no avatar named \"{target}\" is in {Region}");
+
+            StopFollowing();
+            var ok = await _client.Self.TeleportAsync(Region, avatar.Position, ct);
+            return ok ? CommandResult.Success($"teleported to {avatar.Name}")
+                      : CommandResult.Failure($"teleport failed: {_client.Self.TeleportMessage}");
+        }
+
+        /// <summary>
+        /// Send the baby back to its login location. "home" (or a start of
+        /// "last") goes to the avatar's Second Life home; a region or
+        /// Region/x/y/z goes there. Both tiers.
+        /// </summary>
+        private async Task<CommandResult> ReturnHomeAsync(CancellationToken ct)
+        {
+            StopFollowing();
+            var start = string.IsNullOrWhiteSpace(_bot.StartLocation) ? _cfg.DefaultStartLocation : _bot.StartLocation;
+            var resolved = ResolveStart(start);
+
+            if (resolved == "last" || resolved == "home")
+            {
+                var ok = await _client.Self.GoHomeAsync(ct);
+                return ok ? CommandResult.Success("returned home")
+                          : CommandResult.Failure($"return home failed: {_client.Self.TeleportMessage}");
+            }
+
+            var parts = resolved.Substring(4).Split('&'); // uri:region&x&y&z
+            if (parts.Length != 4
+                || !float.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                                   System.Globalization.CultureInfo.InvariantCulture, out var x)
+                || !float.TryParse(parts[2], System.Globalization.NumberStyles.Float,
+                                   System.Globalization.CultureInfo.InvariantCulture, out var y)
+                || !float.TryParse(parts[3], System.Globalization.NumberStyles.Float,
+                                   System.Globalization.CultureInfo.InvariantCulture, out var z))
+                return CommandResult.Failure($"cannot resolve start location \"{start}\"");
+
+            var ok2 = await _client.Self.TeleportAsync(parts[0], new Vector3(x, y, z), ct);
+            return ok2 ? CommandResult.Success($"returned to {parts[0]}")
+                       : CommandResult.Failure($"return home failed: {_client.Self.TeleportMessage}");
+        }
+
+        /// <summary>
+        /// Accept an incoming teleport offer: a caregiver teleporting the
+        /// baby to them lands immediately. The sim sends a TeleportRequest
+        /// offer; replying with the same SessionID and destination accepts
+        /// it, and TeleportCancel would decline. Both tiers — grid-level
+        /// courtesy, no object store involved.
+        /// </summary>
+        private void OnTeleportOffer(object? sender, PacketReceivedEventArgs e)
+        {
+            if (e.Packet is not TeleportRequestPacket offer) return;
+
+            var accept = new TeleportRequestPacket
+            {
+                AgentData = new TeleportRequestPacket.AgentDataBlock
+                {
+                    AgentID = _client.Self.AgentID,
+                    SessionID = offer.AgentData.SessionID
+                },
+                Info = new TeleportRequestPacket.InfoBlock
+                {
+                    RegionID = offer.Info.RegionID,
+                    Position = offer.Info.Position,
+                    LookAt = offer.Info.LookAt
+                }
+            };
+            _client.Network.SendPacket(accept, e.Simulator);
+            Console.WriteLine($"[{Label}] accepted teleport offer");
+        }
+
+        /// <summary>Find an avatar by UUID or by first/display name.</summary>
+        private Avatar? FindAvatar(string target)
+        {
+            var sim = _client.Network.CurrentSim;
+            if (sim == null) return null;
+
+            if (UUID.TryParse(target, out var wantId) && wantId != UUID.Zero)
+            {
+                foreach (var kv in sim.ObjectsAvatars)
+                    if (kv.Value.ID == wantId) return kv.Value;
+                return null;
+            }
+
+            var t = target.Trim().ToLowerInvariant();
+            foreach (var kv in sim.ObjectsAvatars)
+            {
+                var a = kv.Value;
+                var full = $"{a.FirstName} {a.LastName}".Trim().ToLowerInvariant();
+                if (full == t || a.FirstName.ToLowerInvariant() == t || full.StartsWith(t, StringComparison.Ordinal))
+                    return a;
+            }
+            return null;
+        }
+
+        private Vector3? FindAvatarPosition(UUID id)
+        {
+            var sim = _client.Network.CurrentSim;
+            if (sim == null) return null;
+            foreach (var kv in sim.ObjectsAvatars)
+                if (kv.Value.ID == id) return kv.Value.Position;
+            return null;
         }
 
         private CommandResult Say(BotCommand cmd)
@@ -1136,7 +1363,79 @@ namespace LittleLinksFleet.Services
                     _shutdownRequested = true;
                     break;
                 }
+
+                // The region sweep is the other half of world touch and runs
+                // only for premium babies, whose object store is already on.
+                // It lives on its own task like the inventory resync: a slow
+                // region must never delay the heartbeat answer that proves
+                // the baby is alive.
+                if (_bot.AllowWorldTouch
+                    && DateTime.UtcNow - _lastObjectSweep > _cfg.ObjectSweepInterval
+                    && Interlocked.CompareExchange(ref _objectSweepRunning, 1, 0) == 0)
+                {
+                    _lastObjectSweep = DateTime.UtcNow;
+                    _ = Task.Run(async () =>
+                    {
+                        try { await SweepDetectedObjectsAsync(ct); }
+                        catch (OperationCanceledException) { /* session going away */ }
+                        catch (Exception ex) { Console.Error.WriteLine($"[{Label}] object sweep: {ex.Message}"); }
+                        finally { Interlocked.Exchange(ref _objectSweepRunning, 0); }
+                    }, ct);
+                }
             }
+        }
+
+        /// <summary>
+        /// Premium region sweep: find every object in the sim's object store
+        /// that advertises a sit target and report it to the API so the
+        /// parent dashboard can offer a Sit button next to each seat.
+        ///
+        /// Sit targets are only visible in the full ObjectProperties packet,
+        /// which the region sends on request; the cheaper family packet used
+        /// for names does not carry them. So the first sweep asks for full
+        /// properties on every prim it has not seen before, waits one beat
+        /// for the answers (which the handler drops back onto the store in
+        /// place), then walks the store again reading SitName. After that the
+        /// steady state is a local walk plus one small POST.
+        /// </summary>
+        private async Task SweepDetectedObjectsAsync(CancellationToken ct)
+        {
+            var sim = _client.Network.CurrentSim;
+            if (sim == null) return;
+
+            foreach (var kv in sim.ObjectsPrimitives)
+            {
+                var prim = kv.Value;
+                if (prim == null || prim.ParentID == _client.Self.LocalID) continue;
+                if (prim.Properties == null)
+                    _client.Objects.SelectObject(sim, prim.LocalID);
+            }
+
+            await Delay(4, ct);
+
+            var objects = new List<DetectedObject>();
+            foreach (var kv in sim.ObjectsPrimitives)
+            {
+                var prim = kv.Value;
+                if (prim == null || prim.ParentID == _client.Self.LocalID) continue;
+
+                var props = prim.Properties;
+                if (props == null || string.IsNullOrWhiteSpace(props.SitName)) continue;
+
+                objects.Add(new DetectedObject
+                {
+                    object_key = prim.ID.ToString(),
+                    name = string.IsNullOrWhiteSpace(props.Name) ? sim.Name : props.Name,
+                    region = sim.Name,
+                    pos_x = prim.Position.X,
+                    pos_y = prim.Position.Y,
+                    pos_z = prim.Position.Z,
+                });
+            }
+
+            if (objects.Count == 0) return;
+            await _api.DetectedObjectsAsync(BotKey, objects, ct);
+            Console.WriteLine($"[{Label}] object sweep: {objects.Count} sit targets");
         }
 
         /* ══════════════════════════ Helpers ═════════════════════════ */

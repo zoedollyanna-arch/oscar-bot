@@ -166,6 +166,18 @@ namespace LittleLinksFleet.Services
         public Task InventoryAsync(string botKey, List<InventorySnapshotItem> items, CancellationToken ct)
             => PostVoid($"/fleet/{botKey}/inventory", new { items }, ct);
 
+        /// <summary>
+        /// Report the sit-capable objects this bot's region sweep found.
+        ///
+        /// Only called for premium babies: the object store that makes the
+        /// sweep possible is off for everyone else (AllowWorldTouch gates
+        /// AlwaysDecodeObjects / AlwaysRequestObjects / TrackObjects). The
+        /// API replaces the set per bot, so a region where a chair was moved
+        /// stops offering that chair on the next sweep.
+        /// </summary>
+        public Task DetectedObjectsAsync(string botKey, List<DetectedObject> objects, CancellationToken ct)
+            => PostVoid($"/fleet/{botKey}/detected-objects", new { objects }, ct);
+
         private async Task PostVoid(string path, object body, CancellationToken ct)
         {
             try

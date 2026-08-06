@@ -35,6 +35,10 @@ namespace LittleLinksFleet
         public TimeSpan CommandPollInterval { get; private set; }
         public TimeSpan InventorySyncInterval { get; private set; }
 
+        /// <summary>How often premium babies sweep the region for
+        /// sit-capable objects to offer on the dashboard.</summary>
+        public TimeSpan ObjectSweepInterval { get; private set; }
+
         private static string Env(string name, string fallback = "")
         {
             var v = Environment.GetEnvironmentVariable(name);
@@ -71,6 +75,7 @@ namespace LittleLinksFleet
                 HeartbeatInterval     = EnvSeconds("FLEET_HEARTBEAT_SECONDS", 45),
                 CommandPollInterval   = EnvSeconds("FLEET_COMMAND_SECONDS", 3),
                 InventorySyncInterval = EnvSeconds("FLEET_INVENTORY_SECONDS", 900),
+                ObjectSweepInterval   = EnvSeconds("FLEET_SWEEP_SECONDS", 300),
             };
 
             var missing = new List<string>();
@@ -111,7 +116,8 @@ namespace LittleLinksFleet
             Console.WriteLine($"[cfg] api={ApiBaseUrl}");
             Console.WriteLine($"[cfg] hud item=\"{HudItemName}\" start={DefaultStartLocation}");
             Console.WriteLine($"[cfg] claim={ClaimInterval.TotalSeconds:0}s heartbeat={HeartbeatInterval.TotalSeconds:0}s "
-                            + $"commands={CommandPollInterval.TotalSeconds:0}s inventory={InventorySyncInterval.TotalSeconds:0}s");
+                            + $"commands={CommandPollInterval.TotalSeconds:0}s inventory={InventorySyncInterval.TotalSeconds:0}s "
+                            + $"sweep={ObjectSweepInterval.TotalSeconds:0}s");
         }
     }
 }
