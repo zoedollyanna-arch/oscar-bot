@@ -1,5 +1,6 @@
 using System.Text;
 using LibreMetaverse;
+using LibreMetaverse.Packets;
 using LittleLinksFleet.Models;
 
 namespace LittleLinksFleet.Services
